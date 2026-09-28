@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: yearly-to-monthly-api
+    runtime: python
+    plan: free
+    buildCommand: python -m pip install -r requirements.txt && python -m pytest -q
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /docs
