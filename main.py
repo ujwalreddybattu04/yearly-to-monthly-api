@@ -103,7 +103,7 @@ def yearly_to_monthly(df: pd.DataFrame, mode: Mode | str) -> pd.DataFrame:
             for index, year in enumerate(data["year"].tolist())
             for month in range(1, 13)
         ]
-        return pd.DataFrame(rows, columns=["year", "month", *value_columns])
+        return _checked_monthly_frame(rows, value_columns)
     rows = []
     previous = None
     for record in data.to_dict(orient="records"):
@@ -126,7 +126,18 @@ def yearly_to_monthly(df: pd.DataFrame, mode: Mode | str) -> pd.DataFrame:
                     monthly.append(value)
             rows.append([record["year"], month, *monthly])
         previous = current
-    return pd.DataFrame(rows, columns=["year", "month", *value_columns])
+    return _checked_monthly_frame(rows, value_columns)
+
+
+def _checked_monthly_frame(rows: list, value_columns: list[str]) -> pd.DataFrame:
+    """Reject arithmetic overflow before any output formatter sees the data."""
+    result = pd.DataFrame(rows, columns=["year", "month", *value_columns])
+    for position, column in enumerate(value_columns, start=2):
+        if not all(math.isfinite(value) for value in result.iloc[:, position]):
+            raise ValueError(
+                f"Column '{column}' produced a non-finite result; input values are too large."
+            )
+    return result
 
 
 def _read_csv(content: bytes) -> pd.DataFrame:

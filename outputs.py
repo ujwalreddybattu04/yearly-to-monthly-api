@@ -1,6 +1,8 @@
 """Formatting and response builders for monthly percentage data."""
 from calendar import month_abbr
 from io import BytesIO
+from itertools import groupby
+from pathlib import Path
 from threading import Lock
 from xml.sax.saxutils import escape
 
@@ -8,13 +10,42 @@ import pandas as pd
 from fastapi.responses import JSONResponse, Response
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
+from matplotlib import get_data_path
+from matplotlib.font_manager import FontProperties, fontManager
+from matplotlib.text import Text
 from matplotlib.ticker import PercentFormatter
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import Image, LongTable, PageBreak, Paragraph, SimpleDocTemplate, Spacer, TableStyle
 
 _plot_lock = Lock()
+FONT_PATH = Path(__file__).resolve().parent / "fonts" / "UnicodeSans-Regular.ttf"
+PDF_FONT_NAME = "APIUnicodeSans"
+pdfmetrics.registerFont(TTFont(PDF_FONT_NAME, str(FONT_PATH)))
+# Matplotlib ships DejaVu Sans; use the same file as a fallback in both renderers
+# for extended Latin/Greek/Cyrillic glyphs missing from the CJK font.
+FALLBACK_FONT_PATH = Path(get_data_path()) / "fonts" / "ttf" / "DejaVuSans.ttf"
+FALLBACK_PDF_FONT_NAME = "APIFallbackSans"
+pdfmetrics.registerFont(TTFont(FALLBACK_PDF_FONT_NAME, str(FALLBACK_FONT_PATH)))
+fontManager.addfont(str(FONT_PATH))
+CHART_FONT_FAMILIES = [FontProperties(fname=str(FONT_PATH)).get_name(), "DejaVu Sans"]
+_PRIMARY_GLYPHS = pdfmetrics.getFont(PDF_FONT_NAME).face.charToGlyph
+
+
+def _pdf_paragraph(text: str, style) -> Paragraph:
+    """Escape literal text and choose a supported font for each character run."""
+    def font_for(character):
+        return PDF_FONT_NAME if ord(character) in _PRIMARY_GLYPHS else FALLBACK_PDF_FONT_NAME
+
+    markup = "".join(
+        f'<font name="{font}">{escape("".join(characters))}</font>'
+        for font, characters in groupby(str(text), key=font_for)
+    )
+    return Paragraph(markup, style)
+
 
 
 def format_percentage(value: float) -> str:
@@ -83,6 +114,12 @@ def build_trend_chart(df: pd.DataFrame) -> Figure:
     axis.grid(True, alpha=0.25)
     axis.legend()
     axis.margins(x=0.01)
+    # Set properties on the actual artists instead of mutating global rcParams.
+    # This includes legend entries, labels, and both axes' tick/offset text.
+    for text in figure.findobj(Text):
+        text.set_usetex(False)
+        text.set_parse_math(False)
+        text.set_fontproperties(FontProperties(family=CHART_FONT_FAMILIES, size=text.get_fontsize()))
     return figure
 
 
@@ -95,7 +132,9 @@ def build_pdf(df: pd.DataFrame, mode: str) -> bytes:
         title=f"Monthly percentages ({mode})",
     )
     styles = getSampleStyleSheet()
-    story = [Paragraph(f"Monthly percentages ({escape(str(mode))})", styles["Title"])]
+    for style in styles.byName.values():
+        style.fontName = PDF_FONT_NAME
+    story = [_pdf_paragraph(f"Monthly percentages ({mode})", styles["Title"])]
     with _plot_lock:
         figure = build_trend_chart(df)
         chart = BytesIO()
@@ -111,9 +150,9 @@ def build_pdf(df: pd.DataFrame, mode: str) -> bytes:
         if start > 2:
             story.append(PageBreak())
         indices = [0, 1, *range(start, min(start + 6, len(df.columns)))]
-        headers = [Paragraph(escape(str(df.columns[i])), styles["Normal"]) for i in indices]
+        headers = [_pdf_paragraph(str(df.columns[i]), styles["Normal"]) for i in indices]
         rows = [
-            [Paragraph(escape(str(row[i])), styles["Normal"]) for i in indices]
+            [_pdf_paragraph(str(row[i]), styles["Normal"]) for i in indices]
             for row in formatted.itertuples(index=False, name=None)
         ]
         table = LongTable(

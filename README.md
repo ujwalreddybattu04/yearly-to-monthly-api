@@ -115,3 +115,23 @@ For a new deployment, connect the repository through Render's **New > Blueprint*
 
 The service runs independently of your computer. The free instance sleeps after 15 idle minutes and automatically wakes on the next request, which can take about a minute.
 See https://render.com/docs/deploy-fastapi and https://render.com/docs/free.
+
+## Robustness and Unicode fonts
+
+Every calculated monthly value is checked for finiteness before formatting.
+Arithmetic overflow returns HTTP 400 naming the affected column.
+This check does not change either conversion algorithm or impose a new input range.
+
+Chart text is literal: dollar signs and backslashes are not interpreted as
+LaTeX or mathematical expressions. Charts and PDF tables both use the bundled
+API Unicode Sans font, derived from Noto Sans CJK SC. It includes Chinese,
+Japanese, Korean, Latin, Greek, and Cyrillic glyphs from the source font.
+See fonts/README.md and fonts/LICENSE.txt for provenance and licensing.
+The font is bundled with the application; no server-installed font is required.
+Keep the fonts/ directory when copying or deploying this project.
+
+Value cells still require numeric percentages. Non-Latin text is supported in
+headers; a nonnumeric value such as 六% is still invalid. Coverage is limited
+to the bundled font's repertoire, not every Unicode script or emoji.
+
+For characters absent from the CJK font, both renderers use Matplotlib's bundled DejaVu Sans as a fallback, including accented Greek. PDF font runs are escaped as literal text before rendering.
