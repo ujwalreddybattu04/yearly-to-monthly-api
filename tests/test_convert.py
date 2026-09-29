@@ -11,10 +11,10 @@ from main import Mode, app, convert, yearly_to_monthly
 client = TestClient(app)
 
 
-def upload(content, mode="average", filename="yearly.csv"):
+def upload(content, mode="average", filename="yearly.csv", output_format=None):
     return client.post(
         "/convert",
-        params={"mode": mode},
+        params={"mode": mode, **({"format": output_format} if output_format is not None else {})},
         files={"file": (filename, content, "text/csv")},
     )
 
@@ -26,7 +26,10 @@ def converted(content, mode="average"):
     assert response.headers["content-disposition"] == (
         f'attachment; filename="monthly_{mode}.csv"'
     )
-    return pd.read_csv(StringIO(response.text))
+    frame = pd.read_csv(StringIO(response.text))
+    for column in frame.columns[2:]:
+        frame[column] = frame[column].str.removesuffix("%").astype(float)
+    return frame
 
 
 def test_average_single_year():
@@ -34,8 +37,8 @@ def test_average_single_year():
     assert len(result) == 12
     assert result["month"].tolist() == list(range(1, 13))
     assert result["year"].eq(2022).all()
-    assert result["value"].eq(100).all()
-    assert result["value"].sum() == 1200
+    assert result["value"].eq(1200).all()
+    assert result["value"].mean() == 1200
 
 
 def test_average_two_years_sorted():
@@ -43,7 +46,7 @@ def test_average_two_years_sorted():
     assert len(result) == 24
     assert result["year"].tolist() == [2022] * 12 + [2023] * 12
     assert result["month"].tolist() == list(range(1, 13)) * 2
-    assert result["value"].tolist() == [100] * 12 + [120] * 12
+    assert result["value"].tolist() == [1200] * 12 + [1440] * 12
 
 
 def test_exit_example():
@@ -69,8 +72,8 @@ def test_multiple_columns_and_header_normalization(mode):
     result = converted(" Sales , YEAR ,prevalence\n1200,2022,240\n1440,2023,120\n", mode)
     assert result.columns.tolist() == ["year", "month", "Sales", "prevalence"]
     if mode == "average":
-        assert result["Sales"].tolist() == [100] * 12 + [120] * 12
-        assert result["prevalence"].tolist() == [20] * 12 + [10] * 12
+        assert result["Sales"].tolist() == [1200] * 12 + [1440] * 12
+        assert result["prevalence"].tolist() == [240] * 12 + [120] * 12
     else:
         assert result["Sales"].tolist() == [1200] * 12 + list(range(1220, 1441, 20))
         assert result["prevalence"].tolist() == [240] * 12 + list(range(230, 119, -10))
@@ -146,11 +149,12 @@ def test_pure_function_validation():
         yearly_to_monthly(pd.DataFrame({"year": [2022, 2024], "value": [1, 2]}), "exit")
 
 
-def test_no_output_rounding():
-    result = converted("year,value\n2022,1\n")
-    assert result.iloc[0]["value"] == pytest.approx(1 / 12, rel=1e-15)
-    response = upload("year,value\n2022,1\n")
-    assert repr(1 / 12) in response.text
+def test_round_only_when_formatting_output():
+    source = pd.DataFrame({"year": [2022, 2023], "value": [6, 8]})
+    result = yearly_to_monthly(source, "exit")
+    assert result.iloc[12]["value"] == 6 + 2 / 12
+    response = upload("year,value\n2022,6%\n2023,8%", "exit")
+    assert "2023,1,6.17%" in response.text
 
 
 def test_exit_decimal_december_matches_exactly():
@@ -177,11 +181,138 @@ def test_docs_and_enum():
     assert schema["components"]["schemas"]["Mode"]["enum"] == ["average", "exit"]
     operation = schema["paths"]["/convert"]["post"]
     assert "multipart/form-data" in operation["requestBody"]["content"]
-    assert "text/csv" in operation["responses"]["200"]["content"]
+    assert set(operation["responses"]["200"]["content"]) == {"text/csv", "application/json", "application/pdf"}
+    assert schema["components"]["schemas"]["OutputFormat"]["enum"] == ["csv", "json", "pdf"]
+    output_parameter = next(p for p in operation["parameters"] if p["name"] == "format")
+    assert output_parameter["schema"]["default"] == "csv"
 
 def test_month_named_value_column_is_preserved():
     result = yearly_to_monthly(pd.DataFrame({"year": [2022], "month": [1200]}), "average")
     assert result.columns.tolist() == ["year", "month", "month"]
     assert result.iloc[:, 1].tolist() == list(range(1, 13))
-    assert result.iloc[:, 2].eq(100).all()
+    assert result.iloc[:, 2].eq(1200).all()
 
+
+@pytest.mark.parametrize("mode", ["average", "exit"])
+def test_percentage_strings_and_plain_numbers_match(mode):
+    signed = upload("year,value\n2022,6%\n2023,8%", mode)
+    plain = upload("year,value\n2022,6\n2023,8", mode)
+    assert signed.status_code == plain.status_code == 200
+    assert signed.content == plain.content
+
+
+def test_average_percentage_level():
+    result = upload("year,value\n2022,6%")
+    rows = pd.read_csv(StringIO(result.text))
+    assert rows["value"].tolist() == ["6%"] * 12
+
+
+def test_exit_percentage_endpoints():
+    result = upload("year,value\n2022,6%\n2023,8%", "exit")
+    rows = pd.read_csv(StringIO(result.text))
+    assert rows["value"].tolist()[:12] == ["6%"] * 12
+    assert rows.iloc[12]["value"] == "6.17%"
+    assert rows.iloc[-1]["value"] == "8%"
+
+
+@pytest.mark.parametrize("bad", ["abc%", "%", "6%%", "%6", "NaN%", "inf%", "-inf%"])
+@pytest.mark.parametrize("output_format", ["csv", "json", "pdf"])
+def test_invalid_percentages(bad, output_format):
+    response = upload(f"year,value\n2022,{bad}", output_format=output_format)
+    assert response.status_code == 400
+    assert "numeric" in response.json()["detail"]
+
+
+@pytest.mark.parametrize("mode", ["average", "exit"])
+def test_json_matches_csv(mode):
+    content = "year,value,other\n2024,12%,4%\n2022,6%,8%\n2023,8%,6%"
+    csv_response = upload(content, mode)
+    response = upload(content, mode, output_format="json")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/json"
+    assert "content-disposition" not in response.headers
+    assert response.json() == pd.read_csv(StringIO(csv_response.text)).to_dict("records")
+    assert len(response.json()) == 36
+    assert isinstance(response.json()[0]["year"], int)
+    assert isinstance(response.json()[0]["month"], int)
+
+
+@pytest.mark.parametrize("mode", ["average", "exit"])
+def test_pdf_contains_chart_and_matching_table(mode):
+    from pypdf import PdfReader
+    content = "year,value\n2022,6%\n2023,8%\n2024,12%"
+    response = upload(content, mode, output_format="pdf")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+    assert response.headers["content-disposition"] == f'attachment; filename="monthly_{mode}.pdf"'
+    assert response.content.startswith(b"%PDF")
+    reader = PdfReader(BytesIO(response.content))
+    text = "\n".join(page.extract_text() for page in reader.pages)
+    csv_rows = pd.read_csv(StringIO(upload(content, mode).text))
+    for value in csv_rows["value"]:
+        assert value in text
+    assert "2022" in text and "2024" in text
+    assert sum(len(page.images) for page in reader.pages) >= 1
+
+
+def test_pdf_builder_is_independent_and_paginates():
+    from outputs import build_pdf
+    from pypdf import PdfReader
+    source = pd.DataFrame({"year": list(range(2000, 2010)), **{f"metric{i}": [i] * 10 for i in range(8)}})
+    data = yearly_to_monthly(source, "average")
+    original = data.copy(deep=True)
+    reader = PdfReader(BytesIO(build_pdf(data, "average")))
+    assert len(reader.pages) > 2
+    text = "\n".join(page.extract_text() for page in reader.pages)
+    assert "metric0" in text and "metric7" in text and "2009" in text
+    pd.testing.assert_frame_equal(data, original)
+
+
+def test_chart_uses_linear_unrounded_data():
+    from outputs import build_trend_chart
+    data = yearly_to_monthly(pd.DataFrame({"year": [2022, 2023, 2024], "value": ["6%", "8%", "12%"], "other": [12, 8, 6]}), "exit")
+    figure = build_trend_chart(data)
+    try:
+        assert len(figure.axes[0].lines) == 2
+        for index, line in enumerate(figure.axes[0].lines):
+            assert list(line.get_xdata()) == list(range(36))
+            assert list(line.get_ydata()) == data.iloc[:, index + 2].tolist()
+        values = list(figure.axes[0].lines[0].get_ydata())
+        assert [values[i] - values[i - 1] for i in range(12, 24)] == pytest.approx([2 / 12] * 12)
+        assert [values[i] - values[i - 1] for i in range(24, 36)] == pytest.approx([4 / 12] * 12)
+    finally:
+        figure.clear()
+
+
+@pytest.mark.parametrize("value,expected", [(6, "6%"), (8.166666, "8.17%"), (12, "12%"), (6.1, "6.10%"), (-0.001, "0%"), (-2.3456, "-2.35%")])
+def test_percentage_formatting(value, expected):
+    from outputs import format_percentage
+    assert format_percentage(value) == expected
+
+
+@pytest.mark.parametrize("invalid", ["xml", "CSV", ""])
+def test_invalid_format(invalid):
+    assert upload("year,value\n2022,6%", output_format=invalid).status_code == 422
+
+
+def test_explicit_csv_equals_default():
+    content = "year,value\n2022,6%"
+    assert upload(content).content == upload(content, output_format="csv").content
+
+
+def test_get_with_multipart_upload():
+    response = client.request("GET", "/convert?mode=average&format=json", files={"file": ("yearly.csv", "year,value\n2022,6%")})
+    assert response.status_code == 200
+    assert response.json() == [{"year": 2022, "month": m, "value": "6%"} for m in range(1, 13)]
+
+
+def test_json_month_collision_preserves_all_values():
+    response = upload("year,month,month_value\n2022,6%,8%", output_format="json")
+    assert response.status_code == 200
+    assert response.json()[0] == {"year": 2022, "month": 1, "month_value_value": "6%", "month_value": "8%"}
+
+
+def test_whitespace_percentage_input():
+    response = upload("year,value\n2022, 6 % ")
+    assert response.status_code == 200
+    assert pd.read_csv(StringIO(response.text))["value"].eq("6%").all()

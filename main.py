@@ -10,13 +10,21 @@ import pandas as pd
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 
+from outputs import to_csv_response, to_json_response, to_pdf_response
+
 
 class Mode(str, Enum):
     average = "average"
     exit = "exit"
 
 
-app = FastAPI(title="Yearly-to-Monthly CSV Converter")
+class OutputFormat(str, Enum):
+    csv = "csv"
+    json = "json"
+    pdf = "pdf"
+
+
+app = FastAPI(title="Yearly-to-Monthly Percentage Converter")
 
 
 def yearly_to_monthly(df: pd.DataFrame, mode: Mode | str) -> pd.DataFrame:
@@ -61,7 +69,10 @@ def yearly_to_monthly(df: pd.DataFrame, mode: Mode | str) -> pd.DataFrame:
     value_columns = [column for column in names if column != "year"]
     for column in value_columns:
         try:
-            values = pd.to_numeric(data[column], errors="raise").astype(float)
+            cleaned = data[column].map(
+                lambda value: str(value).strip().removesuffix("%").strip()
+            )
+            values = pd.to_numeric(cleaned, errors="raise").astype(float)
         except (ValueError, TypeError, OverflowError):
             raise ValueError(
                 f"Column '{column}' must contain non-empty finite numeric values."
@@ -79,7 +90,7 @@ def yearly_to_monthly(df: pd.DataFrame, mode: Mode | str) -> pd.DataFrame:
         current = [record[column] for column in value_columns]
         for month in range(1, 13):
             if mode == Mode.average:
-                monthly = [value / 12 for value in current]
+                monthly = current.copy()
             elif previous is None or month == 12:
                 # Assign December directly so it exactly matches the input level.
                 monthly = current.copy()
@@ -125,17 +136,21 @@ def _read_csv(content: bytes) -> pd.DataFrame:
         raise ValueError(f"CSV could not be parsed: {exc}") from None
 
 
-@app.post(
-    "/convert",
-    response_class=Response,
-    responses={
-        200: {"content": {"text/csv": {}}, "description": "Monthly CSV download"},
-        400: {"description": "Invalid CSV input"},
+CONVERSION_RESPONSES = {
+    200: {
+        "content": {"text/csv": {}, "application/json": {}, "application/pdf": {}},
+        "description": "Monthly percentages as CSV, JSON, or PDF",
     },
-)
+    400: {"description": "Invalid CSV input"},
+}
+
+
+@app.get("/convert", response_class=Response, responses=CONVERSION_RESPONSES)
+@app.post("/convert", response_class=Response, responses=CONVERSION_RESPONSES)
 def convert(
-    file: UploadFile = File(..., description="UTF-8 CSV containing yearly data"),
-    mode: Mode = Query(..., description="Split totals or interpolate year-end levels"),
+    file: UploadFile = File(..., description="UTF-8 CSV containing yearly percentages, with or without %"),
+    mode: Mode = Query(..., description="Repeat yearly percentages or interpolate year-end percentages"),
+    format: OutputFormat = Query(OutputFormat.csv, description="Response format"),
 ) -> Response:
     if not file.filename or not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="File must have a .csv extension.")
@@ -147,8 +162,8 @@ def convert(
         result = yearly_to_monthly(_read_csv(content), mode)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return Response(
-        content=result.to_csv(index=False),
-        media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="monthly_{mode.value}.csv"'},
-    )
+    if format == OutputFormat.json:
+        return to_json_response(result)
+    if format == OutputFormat.pdf:
+        return to_pdf_response(result, mode.value)
+    return to_csv_response(result, mode.value)

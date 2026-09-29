@@ -1,10 +1,10 @@
-# Yearly-to-Monthly CSV API
+# Yearly-to-Monthly Percentage API
 
-A Python 3.10+ FastAPI application that expands each yearly CSV row into 12 monthly rows.
+FastAPI converts each yearly percentage row into 12 monthly rows and returns CSV, JSON, or a PDF with a trend chart and table.
 
-## Install and run
+Live Swagger UI: https://yearly-to-monthly-api.onrender.com/docs
 
-From this directory, create and activate a virtual environment:
+## Run locally (Python 3.10+)
 
 ```powershell
 python -m venv .venv
@@ -13,89 +13,103 @@ python -m pip install -r requirements.txt
 uvicorn main:app --reload
 ```
 
-On macOS/Linux, activate with `source .venv/bin/activate` instead.
+On macOS/Linux, activate with `source .venv/bin/activate`.
+Open http://127.0.0.1:8000/docs and use **POST /convert**.
+Upload the CSV and select **mode** and **format**.
 
-Open http://127.0.0.1:8000/docs, expand **POST /convert**, click **Try it out**, select a mode, upload a CSV, and execute. The response is a CSV attachment named `monthly_average.csv` or `monthly_exit.csv`.
-
-## Example request
-
-Save this as `yearly.csv`:
+## Input and calculations
 
 ```csv
 year,value
-2022,1200
-2023,1440
+2022,6%
+2023,8%
+2024,12%
 ```
+
+An optional trailing percent sign is accepted in every value column. `6` and `6%` both mean six percent, while `0.06` means 0.06 percent. Whitespace around the number and percent sign is ignored.
+
+- **average:** repeat the yearly percentage for all 12 months. For 2022, each month is 6%. This intentionally replaces the old total-divided-by-12 behavior.
+- **exit:** the first year is flat. In later years, month m equals `previous + ((current - previous) / 12) * m`. December is assigned the current yearly percentage exactly. Equal values stay flat; decreasing values produce a straight downward line.
+
+For exit mode, January 2023 is 6.17%, June is 7%, and December is 8%. January 2024 is 8.33% and December is 12%.
+Calculations keep full floating-point precision. Only output formatting rounds to two decimal places, removing .00 from whole numbers: `6%`, `6.10%`, `8.17%`.
+Small differences between rounded displayed monthly steps do not change the underlying linear calculation.
+
+Multiple percentage columns are processed independently. Headers are trimmed and compared case-insensitively; value names retain their trimmed spelling and original order. Output begins with integer `year` and `month` columns, sorted by year then month.
+
+## Output formats
+
+The required `mode` query parameter is `average` or `exit`.
+The optional `format` query parameter is `csv` (default), `json`, or `pdf`.
+
+| Format | Content type | Response |
+| --- | --- | --- |
+| csv | text/csv | Download named monthly_<mode>.csv |
+| json | application/json | Array of monthly objects directly in the body |
+| pdf | application/pdf | Download named monthly_<mode>.pdf |
+
+All three formats show the same percentage strings. JSON keeps year and month as integers.
+
+```json
+[
+  {"year": 2022, "month": 1, "value": "6%"},
+  {"year": 2022, "month": 2, "value": "6%"}
+]
+```
+
+PDF reports include a continuous line for each value column and a table containing all monthly rows. Chart points use unrounded data and equally spaced monthly positions across years. Long tables continue across pages with repeated headers; wide tables are split into column groups.
+
+CSV/PDF preserve a value column named `month` after the generated month column. Because JSON object keys must be unique, JSON aliases that value column to `month_value`, appending another `_value` if that name already exists.
+
+## Example requests
+
+Use the included `yearly.csv`. On Windows PowerShell, use `curl.exe`.
 
 ```sh
-curl -X POST "http://127.0.0.1:8000/convert?mode=exit" -F "file=@yearly.csv" -o monthly_exit.csv
+curl -X POST "http://127.0.0.1:8000/convert?mode=average" -F "file=@yearly.csv" -o monthly_average.csv
+curl -X POST "http://127.0.0.1:8000/convert?mode=exit&format=json" -F "file=@yearly.csv"
+curl -X POST "http://127.0.0.1:8000/convert?mode=exit&format=pdf" -F "file=@yearly.csv" -o monthly_exit.pdf
 ```
 
-In Windows PowerShell, use `curl.exe` instead of `curl`. Change the query to `mode=average` and the output filename to `monthly_average.csv` for totals.
+Replace the local base URL with `https://yearly-to-monthly-api.onrender.com` to use the hosted API.
+GET /convert is also supported with the same multipart file body and query parameters. Use POST in Swagger and browser clients, which generally cannot send file bodies with GET. Opening the conversion URL alone does not supply a file.
 
-- **average** divides each value by 12. The example produces twelve rows of 100 for 2022 and twelve rows of 120 for 2023.
-- **exit** treats values as year-end levels. All 2022 months equal 1200. In 2023, values are 1220, 1240, 1260, 1280, 1300, 1320, 1340, 1360, 1380, 1400, 1420, and 1440.
-- The first year in exit mode is flat. Later years interpolate from the previous December; December is assigned the current yearly value exactly.
+## Validation
 
-Each numeric column is converted independently. Output columns are `year,month`, followed by input value columns in their original order. Rows are sorted by year and month.
+Invalid input returns HTTP 400 with a clear JSON `detail`, regardless of output format:
 
-## Input and errors
+- Wrong file extension, unreadable content, invalid UTF-8, malformed CSV, or null characters.
+- Missing year column, missing value columns, empty or duplicate headers, or no data rows.
+- Empty, nonnumeric, NaN, or infinite values (including malformed percentage strings such as abc% or 6%%).
+- Non-integer years, duplicate years, or gaps between years after sorting.
 
-Uploads must have a `.csv` extension (case-insensitive) and UTF-8 encoding; a UTF-8 BOM is supported. Headers are trimmed and compared case-insensitively. Value-column spelling is preserved after trimming; the year column becomes `year`.
+UTF-8 BOMs and uppercase .CSV extensions are supported. No new percentage range restriction is imposed.
+Missing required request parameters or invalid mode/format values return HTTP 422.
 
-A CSV requires an integer-valued `year` column, at least one numeric value column, and at least one data row. Years must be unique and consecutive after sorting. Empty, nonnumeric, NaN, or infinite values are rejected. Malformed CSV records and duplicate or empty headers are also rejected. An input value column named `month` is preserved after the generated month column, so that case produces two output columns with the same name.
-
-Invalid CSV inputs return HTTP 400 with a descriptive JSON `detail`. Missing request parameters or modes outside `average` and `exit` return FastAPI's standard HTTP 422 validation response.
-
-Values use standard double-precision floating-point arithmetic. CSV output applies no explicit rounding or fixed decimal formatting. Non-terminating fractions such as 1/12 have normal floating-point representation limits, so sums may differ from the original total by floating-point error.
-
-## Tests and reusable conversion
+## Tests and code
 
 ```sh
 python -m pytest -q
 ```
 
-`main.yearly_to_monthly(df, mode)` accepts a pandas DataFrame and either a `Mode` member or its string value, returns a new DataFrame, and raises `ValueError` for invalid data. It does not modify the input and has no dependency on request objects.
+- `main.yearly_to_monthly(df, mode)`: pure conversion and validation; returns a numeric DataFrame without modifying the input.
+- `outputs.formatted_monthly(df)`: shared percentage formatting.
+- `outputs.to_csv_response`, `to_json_response`, `to_pdf_response`: format-specific response builders.
+- `outputs.build_pdf(df, mode)`: independently testable in-memory PDF generation.
+- `outputs.build_trend_chart(df)`: plots all monthly numeric values without smoothing, randomization, or rounding.
 
-The tests cover both modes, multiple columns, sorting, input validation, download headers, precision, the pure function, and the OpenAPI mode dropdown.
+Tests cover the existing validation cases, both calculation modes, multiple columns, backward-compatible numeric inputs, matching CSV/JSON/PDF values, chart linearity, PDF pagination, download headers, and Swagger dropdowns. pypdf is used to inspect PDF table text and embedded charts in tests.
 
-## Deploy publicly on Render
+## Render deployment
 
-The included render.yaml defines a Python web service on Render's free plan.
-The .python-version file selects the latest Python 3.12 patch release.
-Every build installs requirements and runs the tests before starting the API.
+The public repository is https://github.com/ujwalreddybattu04/yearly-to-monthly-api.
+The included render.yaml defines a free Python web service. The .python-version file selects Python 3.12.
 
-1. Create a repository at https://github.com/new (a private repository works).
-2. Upload the contents of this project to the repository. Put main.py,
-   requirements.txt, render.yaml, and .python-version at the repository root,
-   with tests/test_convert.py inside tests/. Include the hidden .python-version
-   and .gitignore files. Do not upload the ZIP itself, .venv, or log files.
-3. Sign in at https://dashboard.render.com and select New > Blueprint.
-4. Connect your GitHub account and select the repository.
-5. Render reads render.yaml. Review the service and confirm the free plan,
-   then select Deploy Blueprint.
-6. When the service is Live, open its assigned HTTPS URL with /docs appended.
-   Share that URL so others can upload CSV files and download monthly results.
+- Build: `python -m pip install -r requirements.txt && python -m pytest -q`
+- Start: `uvicorn main:app --host 0.0.0.0 --port $PORT`
+- Health check: `/docs`
 
-For manual setup with New > Web Service, choose Python 3 and use:
+For a new deployment, connect the repository through Render's **New > Blueprint** flow and deploy render.yaml. Keep main.py, outputs.py, requirements.txt, render.yaml, and .python-version at the repository root, with tests/ beside them.
 
-- Build command: python -m pip install -r requirements.txt && python -m pytest -q
-- Start command: uvicorn main:app --host 0.0.0.0 --port $PORT
-- Instance type: Free
-- Health check path: /docs
-- Root directory: leave empty when project files are at the repository root.
-
-Example endpoint after deployment (replace YOUR-SERVICE with Render's assigned name):
-
-    https://YOUR-SERVICE.onrender.com/convert?mode=average
-
-The service runs independently of your computer. Render's free service sleeps
-after 15 idle minutes and wakes when requested; the first request can take
-about a minute. An always-running service requires a paid instance.
-The API is public: anyone with the URL can submit a CSV.
-
-Official references:
-- https://render.com/docs/deploy-fastapi
-- https://render.com/docs/infrastructure-as-code
-- https://render.com/docs/python-version
-- https://render.com/docs/free
+The service runs independently of your computer. The free instance sleeps after 15 idle minutes and automatically wakes on the next request, which can take about a minute.
+See https://render.com/docs/deploy-fastapi and https://render.com/docs/free.
