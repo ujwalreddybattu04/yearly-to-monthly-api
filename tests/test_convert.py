@@ -46,7 +46,7 @@ def test_average_two_years_sorted():
     assert len(result) == 24
     assert result["year"].tolist() == [2022] * 12 + [2023] * 12
     assert result["month"].tolist() == list(range(1, 13)) * 2
-    assert result["value"].tolist() == [1200] * 12 + [1440] * 12
+    assert result["value"].tolist() == list(range(1090, 1560, 20))
 
 
 def test_exit_example():
@@ -72,8 +72,8 @@ def test_multiple_columns_and_header_normalization(mode):
     result = converted(" Sales , YEAR ,prevalence\n1200,2022,240\n1440,2023,120\n", mode)
     assert result.columns.tolist() == ["year", "month", "Sales", "prevalence"]
     if mode == "average":
-        assert result["Sales"].tolist() == [1200] * 12 + [1440] * 12
-        assert result["prevalence"].tolist() == [240] * 12 + [120] * 12
+        assert result["Sales"].tolist() == list(range(1090, 1560, 20))
+        assert result["prevalence"].tolist() == list(range(295, 64, -10))
     else:
         assert result["Sales"].tolist() == [1200] * 12 + list(range(1220, 1441, 20))
         assert result["prevalence"].tolist() == [240] * 12 + list(range(230, 119, -10))
@@ -316,3 +316,62 @@ def test_whitespace_percentage_input():
     response = upload("year,value\n2022, 6 % ")
     assert response.status_code == 200
     assert pd.read_csv(StringIO(response.text))["value"].eq("6%").all()
+
+@pytest.mark.parametrize("values", [[6, 8, 12], [12, 8, 6], [6, 12, 3, 9], [6, 6, 6], [6, 8]])
+def test_average_spline_preserves_each_year_mean(values):
+    source = pd.DataFrame({"year": range(2022, 2022 + len(values)), "value": values,
+                           "second": [v * 0.3 + 1 for v in values]})
+    original = source.copy(deep=True)
+    result = yearly_to_monthly(source.iloc[::-1], "average")
+    assert result.groupby("year")["value"].mean().tolist() == pytest.approx(values, abs=1e-9, rel=0)
+    assert result.groupby("year")["second"].mean().tolist() == pytest.approx(source["second"], abs=1e-9, rel=0)
+    pd.testing.assert_frame_equal(source, original)
+
+
+def test_average_example_varies_and_has_small_boundary_steps():
+    data = yearly_to_monthly(pd.DataFrame({"year": [2022, 2023, 2024], "value": ["6%", "8%", "12%"]}), "average")
+    assert data.groupby("year")["value"].nunique().gt(1).all()
+    values = data["value"].tolist()
+    for boundary in (12, 24):
+        step = values[boundary] - values[boundary - 1]
+        left = values[boundary - 1] - values[boundary - 2]
+        right = values[boundary + 1] - values[boundary]
+        assert 0 < step < 0.5
+        assert step < 2 * max(left, right)
+
+
+def test_average_single_year_skips_spline(monkeypatch):
+    def unexpected_spline(*args, **kwargs):
+        pytest.fail("Single year must not construct a spline")
+    monkeypatch.setattr("main.CubicSpline", unexpected_spline)
+    result = yearly_to_monthly(pd.DataFrame({"year": [2022], "value": ["6%"]}), "average")
+    assert result["value"].tolist() == [6.0] * 12
+
+
+def test_average_constant_years_remain_constant():
+    result = yearly_to_monthly(pd.DataFrame({"year": [2022, 2023, 2024], "value": [6, 6, 6]}), "average")
+    assert result["value"].tolist() == [6.0] * 36
+
+
+def test_average_chart_and_all_formats_use_corrected_values():
+    from outputs import build_trend_chart, formatted_monthly
+    from pypdf import PdfReader
+    source = pd.DataFrame({"year": [2022, 2023, 2024], "value": [6, 8, 12]})
+    data = yearly_to_monthly(source, "average")
+    figure = build_trend_chart(data)
+    try:
+        assert list(figure.axes[0].lines[0].get_ydata()) == data["value"].tolist()
+    finally:
+        figure.clear()
+    content = "year,value\n2022,6%\n2023,8%\n2024,12%"
+    expected = formatted_monthly(data)
+    csv_response = upload(content)
+    json_response = upload(content, output_format="json")
+    pdf_response = upload(content, output_format="pdf")
+    assert csv_response.status_code == json_response.status_code == pdf_response.status_code == 200
+    assert pd.read_csv(StringIO(csv_response.text)).to_dict("records") == expected.to_dict("records")
+    assert json_response.json() == expected.to_dict("records")
+    reader = PdfReader(BytesIO(pdf_response.content))
+    text = "\n".join(page.extract_text() for page in reader.pages)
+    assert all(value in text for value in expected["value"])
+    assert sum(len(page.images) for page in reader.pages) >= 1

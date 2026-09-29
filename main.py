@@ -6,7 +6,9 @@ from enum import Enum
 from io import StringIO
 import math
 
+import numpy as np
 import pandas as pd
+from scipy.interpolate import CubicSpline
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 
@@ -84,6 +86,24 @@ def yearly_to_monthly(df: pd.DataFrame, mode: Mode | str) -> pd.DataFrame:
         data[column] = values
 
     data = data.sort_values("year").reset_index(drop=True)
+
+    if mode == Mode.average and len(data) > 1:
+        # Each column is an independent natural spline through year midpoints.
+        targets = data[value_columns].to_numpy(dtype=float)
+        midpoints = np.arange(len(data), dtype=float) * 12 + 6.5
+        positions = np.arange(1, len(data) * 12 + 1, dtype=float)
+        spline = CubicSpline(midpoints, targets, axis=0, bc_type="natural")
+        candidate = spline(positions).reshape(len(data), 12, len(value_columns))
+        offsets = targets - candidate.mean(axis=1)
+        corrected = candidate + offsets[:, None, :]
+        # Year-specific shifts preserve means to floating precision, but do not
+        # mathematically guarantee continuity between adjacent shifted years.
+        rows = [
+            [year, month, *corrected[index, month - 1].tolist()]
+            for index, year in enumerate(data["year"].tolist())
+            for month in range(1, 13)
+        ]
+        return pd.DataFrame(rows, columns=["year", "month", *value_columns])
     rows = []
     previous = None
     for record in data.to_dict(orient="records"):
@@ -149,7 +169,7 @@ CONVERSION_RESPONSES = {
 @app.post("/convert", response_class=Response, responses=CONVERSION_RESPONSES)
 def convert(
     file: UploadFile = File(..., description="UTF-8 CSV containing yearly percentages, with or without %"),
-    mode: Mode = Query(..., description="Repeat yearly percentages or interpolate year-end percentages"),
+    mode: Mode = Query(..., description="Spline with exact yearly means (average), or year-end interpolation (exit)"),
     format: OutputFormat = Query(OutputFormat.csv, description="Response format"),
 ) -> Response:
     if not file.filename or not file.filename.lower().endswith(".csv"):

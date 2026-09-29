@@ -28,12 +28,14 @@ year,value
 
 An optional trailing percent sign is accepted in every value column. `6` and `6%` both mean six percent, while `0.06` means 0.06 percent. Whitespace around the number and percent sign is ignored.
 
-- **average:** repeat the yearly percentage for all 12 months. For 2022, each month is 6%. This intentionally replaces the old total-divided-by-12 behavior.
+- **average:** fit a natural cubic spline through yearly midpoint positions (6.5, 18.5, 30.5, ...), evaluate each month, then add a constant correction within each year so its 12 unrounded months average to the input percentage. Each value column is independent. A single year stays flat. Two years give a linear trend; identical yearly values can remain flat.
 - **exit:** the first year is flat. In later years, month m equals `previous + ((current - previous) / 12) * m`. December is assigned the current yearly percentage exactly. Equal values stay flat; decreasing values produce a straight downward line.
 
 For exit mode, January 2023 is 6.17%, June is 7%, and December is 8%. January 2024 is 8.33% and December is 12%.
 Calculations keep full floating-point precision. Only output formatting rounds to two decimal places, removing .00 from whole numbers: `6%`, `6.10%`, `8.17%`.
-Small differences between rounded displayed monthly steps do not change the underlying linear calculation.
+In exit mode, small differences between rounded displayed monthly steps do not change the underlying linear calculation. In average mode, the mean constraint holds on unrounded values within floating-point tolerance; the displayed two-decimal values can have a slightly different mean.
+
+The average algorithm uses spline extrapolation for months before the first midpoint and after the last midpoint. Cubic splines may overshoot the input range; no clipping is applied because clipping would change yearly means. Different constant yearly corrections can introduce boundary discontinuities, so this requested two-step algorithm is not a guarantee of global continuity for arbitrary input. The 6%, 8%, 12% example is checked for small December-to-January steps.
 
 Multiple percentage columns are processed independently. Headers are trimmed and compared case-insensitively; value names retain their trimmed spelling and original order. Output begins with integer `year` and `month` columns, sorted by year then month.
 
@@ -48,7 +50,7 @@ The optional `format` query parameter is `csv` (default), `json`, or `pdf`.
 | json | application/json | Array of monthly objects directly in the body |
 | pdf | application/pdf | Download named monthly_<mode>.pdf |
 
-All three formats show the same percentage strings. JSON keeps year and month as integers.
+All three formats show the same percentage strings. JSON keeps year and month as integers. Example for a single-year 6% input (or the first year in exit mode):
 
 ```json
 [
