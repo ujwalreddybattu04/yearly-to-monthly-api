@@ -143,3 +143,9 @@ to the bundled font's repertoire, not every Unicode script or emoji.
 For characters absent from the CJK font, both renderers use Matplotlib's bundled DejaVu Sans as a fallback, including accented Greek. PDF font runs are escaped as literal text before rendering.
 
 All API outputs retain percentage formatting. The query parameters are `mode` and `format`; there is no units selector.
+
+## Average precision safeguards
+
+Before constructing the optimizer, each column's largest/smallest nonzero absolute yearly target ratio is checked against `MAX_SAFE_MAGNITUDE_RATIO = 1e12`. Wider ranges fail the whole request with HTTP 400 naming the column. Zero values are excluded from the ratio. This is a conservative precision guard, not a proof that every smaller ratio is numerically safe.
+
+Every returned Average column, including single-year and constant fast paths, is independently checked after rescaling using Decimal arithmetic at 800-digit precision. Each year's relative mean error must be less than 1e-6, with a denominator floor of 1e-6 (equivalent to an absolute tolerance of 1e-12 near zero). Only tiny raw-unit equality residuals can be refined, by adjusting one small-magnitude month other than M1; the complete result must still pass verification. Unverifiable or non-finite output raises a named error instead of returning silently incorrect data. This check applies before two-decimal percentage display formatting. Exit is unchanged.

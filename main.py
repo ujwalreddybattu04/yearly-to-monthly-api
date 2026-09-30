@@ -89,7 +89,7 @@ def yearly_to_monthly(df: pd.DataFrame, mode: Mode | str) -> pd.DataFrame:
 
     if mode == Mode.average:
         targets = data[value_columns].to_numpy(dtype=float)
-        corrected = smooth_average(targets)
+        corrected = smooth_average(targets, value_columns)
         rows = [
             [year, month, *corrected[index * 12 + month - 1].tolist()]
             for index, year in enumerate(data["year"].tolist())
