@@ -55,25 +55,25 @@ def format_percentage(value: float) -> str:
     return text.removesuffix(".00") + "%"
 
 
-def formatted_monthly(df: pd.DataFrame, units: str = "percent") -> pd.DataFrame:
+def formatted_monthly(df: pd.DataFrame) -> pd.DataFrame:
     """Format value columns by position, preserving even a value named month."""
     rows = [
-        [int(row[0]), int(row[1]), *(format_percentage(value) if units == "percent" else float(value) for value in row[2:])]
+        [int(row[0]), int(row[1]), *(format_percentage(value) for value in row[2:])]
         for row in df.itertuples(index=False, name=None)
     ]
     return pd.DataFrame(rows, columns=df.columns)
 
 
-def to_csv_response(df: pd.DataFrame, mode: str, units: str = "percent") -> Response:
+def to_csv_response(df: pd.DataFrame, mode: str) -> Response:
     return Response(
-        formatted_monthly(df, units).to_csv(index=False),
+        formatted_monthly(df).to_csv(index=False),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="monthly_{mode}.csv"'},
     )
 
 
-def to_json_response(df: pd.DataFrame, units: str = "percent") -> JSONResponse:
-    formatted = formatted_monthly(df, units)
+def to_json_response(df: pd.DataFrame) -> JSONResponse:
+    formatted = formatted_monthly(df)
     # JSON object keys must be unique. Preserve the generated month key and
     # give a colliding input value column a deterministic, non-colliding alias.
     names = list(formatted.columns)
@@ -89,7 +89,7 @@ def to_json_response(df: pd.DataFrame, units: str = "percent") -> JSONResponse:
     return JSONResponse(records)
 
 
-def build_trend_chart(df: pd.DataFrame, units: str = "percent") -> Figure:
+def build_trend_chart(df: pd.DataFrame) -> Figure:
     """Build a chart using full-precision values and evenly spaced month indices.
 
     Call under _plot_lock when used concurrently by request handlers.
@@ -111,12 +111,11 @@ def build_trend_chart(df: pd.DataFrame, units: str = "percent") -> Figure:
     ]
     axis.set_xticks(ticks, labels, rotation=40, ha="right")
     axis.set_xlabel("Month")
-    label = "Percentage" if units == "percent" else "Value"
+    label = "Percentage"
     if chart_scale != 1:
         label += f" (multiply ticks by {chart_scale:.6g})"
     axis.set_ylabel(label)
-    if units == "percent":
-        axis.yaxis.set_major_formatter(PercentFormatter(xmax=100))
+    axis.yaxis.set_major_formatter(PercentFormatter(xmax=100))
     axis.grid(True, alpha=0.25)
     axis.legend()
     axis.margins(x=0.01)
@@ -129,20 +128,20 @@ def build_trend_chart(df: pd.DataFrame, units: str = "percent") -> Figure:
     return figure
 
 
-def build_pdf(df: pd.DataFrame, mode: str, units: str = "percent") -> bytes:
+def build_pdf(df: pd.DataFrame, mode: str) -> bytes:
     """Build an in-memory PDF, independently of FastAPI response handling."""
     output = BytesIO()
     document = SimpleDocTemplate(
         output, pagesize=landscape(A4),
         leftMargin=36, rightMargin=36, topMargin=30, bottomMargin=30,
-        title=f"Monthly {'percentages' if units == 'percent' else 'values'} ({mode})",
+        title=f"Monthly percentages ({mode})",
     )
     styles = getSampleStyleSheet()
     for style in styles.byName.values():
         style.fontName = PDF_FONT_NAME
-    story = [_pdf_paragraph(f"Monthly {'percentages' if units == 'percent' else 'values'} ({mode})", styles["Title"])]
+    story = [_pdf_paragraph(f"Monthly percentages ({mode})", styles["Title"])]
     with _plot_lock:
-        figure = build_trend_chart(df, units)
+        figure = build_trend_chart(df)
         chart = BytesIO()
         try:
             figure.savefig(chart, format="png", dpi=130)
@@ -150,7 +149,7 @@ def build_pdf(df: pd.DataFrame, mode: str, units: str = "percent") -> bytes:
             figure.clear()
     chart.seek(0)
     story.extend([Image(chart, width=document.width, height=document.width * 0.38), Spacer(1, 12)])
-    formatted = formatted_monthly(df, units)
+    formatted = formatted_monthly(df)
     # Split wide tables into column groups, keeping year/month in each group.
     for start in range(2, len(df.columns), 6):
         if start > 2:
@@ -178,9 +177,9 @@ def build_pdf(df: pd.DataFrame, mode: str, units: str = "percent") -> bytes:
     return output.getvalue()
 
 
-def to_pdf_response(df: pd.DataFrame, mode: str, units: str = "percent") -> Response:
+def to_pdf_response(df: pd.DataFrame, mode: str) -> Response:
     return Response(
-        build_pdf(df, mode, units),
+        build_pdf(df, mode),
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="monthly_{mode}.pdf"'},
     )

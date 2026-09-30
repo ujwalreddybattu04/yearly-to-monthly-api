@@ -37,7 +37,7 @@ In exit mode, small differences between rounded displayed monthly steps do not c
 
 Average's first month has a hard positive lower limit: `epsilon = max(1e-6, 0.01 * max(data_max, 0))`, independently per value column. This is a first-month anchor only, not a range constraint for the entire curve. The absolute floor handles zero and negative maxima. Positive constants above epsilon stay flat; zero, negative, or extremely small constant targets require optimization to preserve their means while starting positive. Later months can be negative. Scaling invariance holds when the absolute floor is inactive; it deliberately does not hold below that floor.
 
-A finite soft penalty does **not** guarantee strict containment or restrict all overshoot to sharp jumps. For example, 6/8/12 gives roughly 5.97-12.21 at the default weight. Strict containment plus an exact mean at the minimum/maximum would require those whole years to be flat. The implemented objective is the requested soft tradeoff, not a hidden hard bound or jump detector. Raw first-month values are positive; unchanged two-decimal percentage formatting may show very small positive values as `0%`. Use `units=number` to inspect unrounded numeric values.
+A finite soft penalty does **not** guarantee strict containment or restrict all overshoot to sharp jumps. For example, 6/8/12 gives roughly 5.97-12.21 at the default weight. Strict containment plus an exact mean at the minimum/maximum would require those whole years to be flat. The implemented objective is the requested soft tradeoff, not a hidden hard bound or jump detector. Raw first-month values are positive; unchanged two-decimal percentage formatting may show very small positive values as `0%`. Unrounded values are available from the pure conversion function.
 
 Each column is normalized for solver stability. Sparse operators and explicit nonnegative hinge slack variables avoid dense matrices and redundant solver variables. Small equality residuals are removed numerically; if first-month roundoff is repaired, the other eleven months are compensated to preserve the year's mean. Non-finite outputs and failed convergence still produce errors. This is not a reproduction of a Matson-Jack formula.
 
@@ -142,6 +142,4 @@ to the bundled font's repertoire, not every Unicode script or emoji.
 
 For characters absent from the CJK font, both renderers use Matplotlib's bundled DejaVu Sans as a fallback, including accented Greek. PDF font runs are escaped as literal text before rendering.
 
-## Units
-
-Use `units=percent` (default) for existing percentage strings and chart labels. Use `units=number` for numeric JSON values, numeric CSV cells, and an absolute-value PDF chart. Units control presentation only: 6 and 6% both parse as 6; there is no division or multiplication by 100. Extreme chart magnitudes are scaled with an explicit axis multiplier to avoid plotting overflow; underlying exported numbers are unchanged.
+All API outputs retain percentage formatting. The query parameters are `mode` and `format`; there is no units selector.

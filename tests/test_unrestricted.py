@@ -8,23 +8,14 @@ from main import app, yearly_to_monthly
 
 client = TestClient(app)
 
-@pytest.mark.parametrize("mode", ["average", "exit"])
-@pytest.mark.parametrize("fmt", ["csv", "json", "pdf"])
-def test_number_units(mode, fmt):
-    r = client.post("/convert", params={"mode":mode,"format":fmt,"units":"number"},
-                    files={"file":("a.csv","year,sales\n1,500\n2,800\n3,1000")})
-    assert r.status_code == 200
-    expected = yearly_to_monthly(pd.DataFrame({"year":[1,2,3],"sales":[500,800,1000]}),mode)
-    if fmt == "json":
-        assert all(isinstance(row["sales"],(int,float)) for row in r.json())
-        np.testing.assert_allclose([row["sales"] for row in r.json()], expected.sales)
-    elif fmt == "csv":
-        assert "%" not in r.text
-        np.testing.assert_allclose(pd.read_csv(StringIO(r.text)).sales, expected.sales)
-    else:
-        text = "\n".join(p.extract_text() for p in PdfReader(BytesIO(r.content)).pages)
-        assert "Monthly values" in text
-        assert "%" not in text
+def test_units_removed_from_schema_and_percent_output_retained():
+    schema=client.get("/openapi.json").json()
+    assert "Units" not in schema["components"]["schemas"]
+    for method in ["get","post"]:
+        assert {p["name"] for p in schema["paths"]["/convert"][method]["parameters"]} == {"mode","format"}
+    response=client.post("/convert?mode=average&format=json",files={"file":("a.csv","year,value\n1,6")})
+    assert response.status_code==200
+    assert response.json()[0]["value"]=="6%"
 
 
 def test_scale_invariance_and_negative_values():
@@ -42,6 +33,3 @@ def test_no_bound_clipping_and_mean_exact():
     assert actual.v.min()<0 and actual.v.max()>100
     np.testing.assert_allclose(actual.groupby("year").v.mean(),source.v,atol=1e-6)
 
-
-def test_invalid_units():
-    assert client.post("/convert?mode=average&units=other",files={"file":("a.csv","year,v\n1,6")}).status_code==422

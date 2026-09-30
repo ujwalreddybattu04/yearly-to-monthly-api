@@ -20,11 +20,6 @@ class Mode(str, Enum):
     exit = "exit"
 
 
-class Units(str, Enum):
-    percent = "percent"
-    number = "number"
-
-
 class OutputFormat(str, Enum):
     csv = "csv"
     json = "json"
@@ -180,7 +175,6 @@ def convert(
     file: UploadFile = File(..., description="UTF-8 CSV containing yearly percentages, with or without %"),
     mode: Mode = Query(..., description="Soft data-range smoothing with positive first month and exact yearly means (average), or year-end interpolation (exit)"),
     format: OutputFormat = Query(OutputFormat.csv, description="Response format"),
-    units: Units = Query(Units.percent, description="Percent labels (default), or absolute numbers; no rescaling"),
 ) -> Response:
     if not file.filename or not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="File must have a .csv extension.")
@@ -193,7 +187,7 @@ def convert(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if format == OutputFormat.json:
-        return to_json_response(result, units.value)
+        return to_json_response(result)
     if format == OutputFormat.pdf:
-        return to_pdf_response(result, mode.value, units.value)
-    return to_csv_response(result, mode.value, units.value)
+        return to_pdf_response(result, mode.value)
+    return to_csv_response(result, mode.value)
