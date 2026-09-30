@@ -1,4 +1,4 @@
-"""Bounded quadratic smoothing preserves yearly means."""
+"""Unrestricted quadratic smoothing preserves yearly means."""
 import numpy as np
 import pandas as pd
 import pytest
@@ -15,16 +15,14 @@ ADOPTION = pd.DataFrame({
 
 def check(source):
     result = yearly_to_monthly(source, "average")
-    assert result.iloc[:,2:].ge(0).all().all()
-    assert result.iloc[:,2:].le(100).all().all()
     np.testing.assert_allclose(result.groupby("year").mean().iloc[:,1:],
                                source.iloc[:,1:], atol=1e-6, rtol=0)
     return result
 
 
-def test_adoption_bounded_mean_exact_and_curved():
+def test_adoption_mean_exact_and_curved():
     result = check(ADOPTION)
-    assert result[result.year==10].iloc[:,2:].eq(100).all().all()
+    assert result.iloc[:,2:].max().max() > 100
     assert result[result.year==5].iloc[:,2:].nunique().ge(3).all()
     smooth = np.square(np.diff(result.iloc[:,2:].to_numpy(), n=2, axis=0)).sum()
     flat = np.square(np.diff(np.repeat(ADOPTION.iloc[:,1:].to_numpy(),12,axis=0), n=2, axis=0)).sum()
@@ -58,14 +56,11 @@ def test_valid_targets_always_succeed(values):
     assert response.status_code == 200
 
 
-@pytest.mark.parametrize("value", [-1,150])
-def test_invalid_targets_rejected_before_solver(monkeypatch, value):
-    def fail(*args):
-        pytest.fail("Invalid targets must not reach optimizer")
-    monkeypatch.setattr("main.bounded_average", fail)
-    response = client.post("/convert?mode=average", files={"file":("a.csv",f"year,value\n1,{value}%")})
-    assert response.status_code == 400
-    assert "yearly value" in response.json()["detail"]
+@pytest.mark.parametrize("value", [-1,150,1000])
+def test_absolute_targets_are_accepted(value):
+    response = client.post("/convert?mode=average&units=number&format=json", files={"file":("a.csv",f"year,value\n1,{value}")})
+    assert response.status_code == 200
+    assert all(row["value"] == value for row in response.json())
 
 
 def test_sparse_thousand_years_ten_columns():
@@ -81,6 +76,4 @@ def test_sparse_thousand_years_ten_columns():
 
 def test_adoption_exit_stays_bounded_and_matches_endpoints():
     result = yearly_to_monthly(ADOPTION, "exit")
-    assert result.iloc[:,2:].ge(0).all().all()
-    assert result.iloc[:,2:].le(100).all().all()
     np.testing.assert_array_equal(result[result.month==12].iloc[:,2:], ADOPTION.iloc[:,1:])

@@ -25,12 +25,16 @@ def upload(content, mode="average", fmt="pdf"):
 
 @pytest.mark.parametrize("fmt", ["csv", "json", "pdf"])
 @pytest.mark.parametrize("extreme", ["1e308%", "-1e308%"])
-def test_overflow_returns_clear_400(fmt, extreme):
-    with np.errstate(over="ignore", invalid="ignore"):
-        response = upload(f"year,normal,large\n2022,6%,{extreme}\n2023,8%,{extreme}", fmt=fmt)
+def test_large_finite_constants_remain_accepted(fmt, extreme):
+    response = upload(f"year,large\n2022,{extreme}\n2023,{extreme}", fmt=fmt)
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize("fmt", ["csv", "json", "pdf"])
+def test_real_overflow_returns_400(fmt):
+    response = upload("year,large\n1,-1e308\n2,1e308", fmt=fmt)
     assert response.status_code == 400
-    assert "Column 'large' contains a yearly value" in response.json()["detail"]
-    assert "0-100%" in response.json()["detail"]
+    assert "non-finite result" in response.json()["detail"]
 
 
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])

@@ -8,7 +8,7 @@ import math
 
 import numpy as np
 import pandas as pd
-from smoothing import bounded_average
+from smoothing import smooth_average
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 
@@ -18,6 +18,11 @@ from outputs import to_csv_response, to_json_response, to_pdf_response
 class Mode(str, Enum):
     average = "average"
     exit = "exit"
+
+
+class Units(str, Enum):
+    percent = "percent"
+    number = "number"
 
 
 class OutputFormat(str, Enum):
@@ -89,14 +94,7 @@ def yearly_to_monthly(df: pd.DataFrame, mode: Mode | str) -> pd.DataFrame:
 
     if mode == Mode.average:
         targets = data[value_columns].to_numpy(dtype=float)
-        for index, column in enumerate(value_columns):
-            invalid = targets[:, index][(targets[:, index] < 0) | (targets[:, index] > 100)]
-            if invalid.size:
-                raise ValueError(
-                    f"Column '{column}' contains a yearly value of {invalid[0]:g}%, "
-                    "which is outside the valid 0-100% range."
-                )
-        corrected = bounded_average(targets)
+        corrected = smooth_average(targets)
         rows = [
             [year, month, *corrected[index * 12 + month - 1].tolist()]
             for index, year in enumerate(data["year"].tolist())
@@ -180,8 +178,9 @@ CONVERSION_RESPONSES = {
 @app.post("/convert", response_class=Response, responses=CONVERSION_RESPONSES)
 def convert(
     file: UploadFile = File(..., description="UTF-8 CSV containing yearly percentages, with or without %"),
-    mode: Mode = Query(..., description="Bounded smoothing with exact yearly means (average), or year-end interpolation (exit)"),
+    mode: Mode = Query(..., description="Unbounded smoothing with exact yearly means (average), or year-end interpolation (exit)"),
     format: OutputFormat = Query(OutputFormat.csv, description="Response format"),
+    units: Units = Query(Units.percent, description="Percent labels (default), or absolute numbers; no rescaling"),
 ) -> Response:
     if not file.filename or not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="File must have a .csv extension.")
@@ -194,7 +193,7 @@ def convert(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if format == OutputFormat.json:
-        return to_json_response(result)
+        return to_json_response(result, units.value)
     if format == OutputFormat.pdf:
-        return to_pdf_response(result, mode.value)
-    return to_csv_response(result, mode.value)
+        return to_pdf_response(result, mode.value, units.value)
+    return to_csv_response(result, mode.value, units.value)
