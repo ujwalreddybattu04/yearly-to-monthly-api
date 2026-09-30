@@ -1,4 +1,4 @@
-"""Minimum-curvature monthly smoothing with exact yearly means and a data-derived soft range."""
+"""Minimum-curvature monthly smoothing with exact yearly means and no range bounds or penalties."""
 from decimal import Decimal, localcontext
 import math
 
@@ -7,9 +7,6 @@ import numpy as np
 from scipy import sparse
 
 
-# Higher weights resist excursions more strongly; lower weights favor curvature.
-# This is a soft penalty, not a guarantee of staying within yearly extrema.
-RANGE_PENALTY_WEIGHT = 0.1
 FIRST_MONTH_FRACTION = 0.01
 FIRST_MONTH_FLOOR = 1e-6
 
@@ -84,7 +81,7 @@ def smooth_average(targets, column_names=None):
 
     Scale each column before optimization to support ordinary absolute values
     and very large/small finite inputs without badly scaled solver constraints.
-    Each column has its own soft min/max and positive first-month constraint.
+    Only yearly means and the positive first-month constraint restrict the curve.
     """
     years, columns = targets.shape
     names = list(column_names) if column_names is not None else [f"column_{i}" for i in range(columns)]
@@ -106,16 +103,9 @@ def smooth_average(targets, column_names=None):
                            sparse.csc_matrix(np.ones((1, 12))/12), format="csc")
     x = cp.Variable(months)
     yearly = cp.Parameter(years)
-    data_min, data_max, first_min = cp.Parameter(), cp.Parameter(), cp.Parameter(nonneg=True)
-    # Explicit nonnegative slacks implement squared hinge loss without the
-    # redundant auxiliaries introduced by composing pos() and sum_squares().
-    below, above = cp.Variable(months, nonneg=True), cp.Variable(months, nonneg=True)
-    objective = (cp.sum_squares(differences @ x)
-                 + RANGE_PENALTY_WEIGHT * cp.sum_squares(below)
-                 + RANGE_PENALTY_WEIGHT * cp.sum_squares(above))
-    problem = cp.Problem(cp.Minimize(objective),
-                         [averages @ x == yearly, x[0] >= first_min,
-                          below >= data_min - x, above >= x - data_max])
+    first_min = cp.Parameter(nonneg=True)
+    problem = cp.Problem(cp.Minimize(cp.sum_squares(differences @ x)),
+                         [averages @ x == yearly, x[0] >= first_min])
     result = np.empty((months, columns))
     for column in range(columns):
         target = targets[:, column]
@@ -126,11 +116,10 @@ def smooth_average(targets, column_names=None):
         scale = max(np.max(np.abs(target)), epsilon) / 100.0
         normalized = target / scale
         yearly.value = normalized
-        data_min.value, data_max.value = normalized.min(), normalized.max()
         first_min.value = epsilon / scale
         x.value = np.repeat(normalized, 12)
         try:
-            problem.solve(solver=cp.OSQP, eps_abs=1e-7, eps_rel=1e-7, rho=0.01, adaptive_rho=False,
+            problem.solve(solver=cp.OSQP, eps_abs=1e-7, eps_rel=1e-7, adaptive_rho_interval=50,
                           max_iter=30000, polishing=True, warm_start=True)
         except cp.error.SolverError as exc:
             raise ValueError("Average optimization failed to converge; please retry.") from exc
@@ -147,7 +136,9 @@ def smooth_average(targets, column_names=None):
         correction = max(0.0, first_min.value - blocks[0, 0])
         if correction > 1e-8:
             raise ValueError("Average optimization did not meet first-month accuracy requirements.")
-        blocks[0, 0] += correction
+        # Assign directly: adding a tiny epsilon to a cancelling correction can
+        # round back to zero at extreme scales.
+        blocks[0, 0] = max(blocks[0, 0], first_min.value)
         blocks[0, 1:] -= correction / 11
         with np.errstate(over="ignore", invalid="ignore"):
             result[:, column] = (blocks * scale).ravel()

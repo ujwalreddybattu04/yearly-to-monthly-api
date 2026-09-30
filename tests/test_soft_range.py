@@ -22,15 +22,20 @@ def convert(values):
 def test_thirteen_year_diagnostic(values):
     result=convert(values)
     assert max(values)-2 <= result.max() <= max(values)+2
-    assert result.min() >= min(values)-2
+    assert result.min() > 0  # No input-minimum restriction remains.
     assert np.unique(result[48:60]).size>=3
 
 
-def test_gentle_soft_range_not_hard_wall():
+def test_gentle_data_matches_unpenalized_optimum():
     result=convert([6,8,12])
-    assert result.min()>5.9 and result.max()<12.3
-    # A finite soft penalty does not imply strict containment at extrema.
-    assert result.min()<6 or result.max()>12
+    # Independent equality-constrained least-curvature solution (no penalty).
+    n=36
+    d=np.diff(np.eye(n), n=2, axis=0)
+    a=np.kron(np.eye(3),np.ones((1,12))/12)
+    kkt=np.block([[2*d.T@d,a.T],[a,np.zeros((3,3))]])
+    reference=np.linalg.solve(kkt,np.r_[np.zeros(n),[6,8,12]])[:n]
+    assert reference[0]>FIRST_MONTH_FRACTION*12
+    np.testing.assert_allclose(result,reference,atol=1e-5)
 
 
 def test_jump_excursions_near_transition():
@@ -38,13 +43,14 @@ def test_jump_excursions_near_transition():
     assert 12 <= np.argmin(result) <24
     assert 24 <= np.argmax(result) <36
     assert abs(result[24]-result[23])<20
-    assert result.min()>0 and result.max()<100
+    assert result.min()<10 and result.max()>90
 
 
 def test_absolute_values_and_independent_column_scales():
     values=[1000,4000,9000]
     result=convert(values)
-    assert result.min()>900 and result.max()<9500
+    assert result[0]>0
+    assert result.max()>max(values)
     frame=pd.DataFrame({"year":[1,2,3],"small":[6,8,12],"large":values})
     combined=yearly_to_monthly(frame,"average")
     np.testing.assert_allclose(combined.large,result,atol=1e-5)
