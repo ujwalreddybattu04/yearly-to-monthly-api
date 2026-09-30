@@ -32,7 +32,7 @@ def test_large_finite_constants_remain_accepted(fmt, extreme):
 
 @pytest.mark.parametrize("fmt", ["csv", "json", "pdf"])
 def test_real_overflow_returns_400(fmt):
-    response = upload("year,large\n1,-1e308\n2,1e308", fmt=fmt)
+    response = upload("year,large\n1,-1.79e308\n2,1.79e308", fmt=fmt)
     assert response.status_code == 400
     assert "non-finite result" in response.json()["detail"]
 

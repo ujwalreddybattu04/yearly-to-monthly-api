@@ -60,7 +60,9 @@ def test_valid_targets_always_succeed(values):
 def test_absolute_targets_are_accepted(value):
     response = client.post("/convert?mode=average&units=number&format=json", files={"file":("a.csv",f"year,value\n1,{value}")})
     assert response.status_code == 200
-    assert all(row["value"] == value for row in response.json())
+    values = [row["value"] for row in response.json()]
+    assert values[0] > 0
+    assert np.mean(values) == pytest.approx(value, abs=1e-6)
 
 
 def test_sparse_thousand_years_ten_columns():

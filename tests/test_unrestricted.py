@@ -30,7 +30,7 @@ def test_number_units(mode, fmt):
 def test_scale_invariance_and_negative_values():
     source = pd.DataFrame({"year":[1,2,3],"v":[6,8,12]})
     reference = yearly_to_monthly(source,"average").v.to_numpy()
-    for scale in [1e-150,1e150,-3]:
+    for scale in [1e-3,1e150,3]:
         scaled = source.copy(); scaled.v = scaled.v * scale
         actual = yearly_to_monthly(scaled,"average").v.to_numpy() / scale
         np.testing.assert_allclose(actual,reference,atol=1e-7,rtol=1e-8)

@@ -28,16 +28,20 @@ year,value
 
 An optional trailing percent sign is accepted in every value column. `6` and `6%` both mean six percent, while `0.06` means 0.06 percent. Whitespace around the number and percent sign is ignored.
 
-- **average:** minimize squared monthly second differences using sparse CVXPY/OSQP optimization with exact yearly means. There are no fixed or input-derived bounds, clamps, or endpoint anchors. Negative numbers and absolute values above 100 are accepted. Single-year and constant series remain flat.
+- **average:** minimize squared monthly second differences plus squared excursions outside each column's own yearly minimum and maximum. `RANGE_PENALTY_WEIGHT = 0.1` in smoothing.py controls resistance to excursions: increasing it favors staying near the input range; decreasing it favors smoothness. Yearly means remain hard equality constraints. There are no hard range bounds and no percentage-specific restrictions.
 - **exit:** the first year is flat. In later years, month m equals `previous + ((current - previous) / 12) * m`. December is assigned the current yearly percentage exactly. Equal values stay flat; decreasing values produce a straight downward line.
 
 For exit mode, January 2023 is 6.17%, June is 7%, and December is 8%. January 2024 is 8.33% and December is 12%.
 Calculations keep full floating-point precision. Only output formatting rounds to two decimal places, removing .00 from whole numbers: `6%`, `6.10%`, `8.17%`.
 In exit mode, small differences between rounded displayed monthly steps do not change the underlying linear calculation. In average mode, the mean constraint holds on unrounded values within floating-point tolerance; the displayed two-decimal values can have a slightly different mean.
 
-Average is unrestricted as requested for the comparison experiment. Smoothness does not guarantee monotonicity, positivity, or staying within yearly extrema: overshoot and negative starting months can occur, even for gradual input. Exact annual means remain enforced; output percentage rounding can slightly alter displayed means. Do not interpret this as a Matson-Jack model: the supplied workbook is reference data, not a supplied formula.
+Average's first month has a hard positive lower limit: `epsilon = max(1e-6, 0.01 * max(data_max, 0))`, independently per value column. This is a first-month anchor only, not a range constraint for the entire curve. The absolute floor handles zero and negative maxima. Positive constants above epsilon stay flat; zero, negative, or extremely small constant targets require optimization to preserve their means while starting positive. Later months can be negative. Scaling invariance holds when the absolute floor is inactive; it deliberately does not hold below that floor.
 
-For Jaskreet's example, explicitly set year 10 to 98 and append years 11-13 at 100 in the input file. The API does not alter or append input years automatically. This changes Moderate and Fast from year 9 values 99 and 99.8 down to 98, so those two series have a small deliberate dip. No nonzero or positive first month is forced.
+A finite soft penalty does **not** guarantee strict containment or restrict all overshoot to sharp jumps. For example, 6/8/12 gives roughly 5.97-12.21 at the default weight. Strict containment plus an exact mean at the minimum/maximum would require those whole years to be flat. The implemented objective is the requested soft tradeoff, not a hidden hard bound or jump detector. Raw first-month values are positive; unchanged two-decimal percentage formatting may show very small positive values as `0%`. Use `units=number` to inspect unrounded numeric values.
+
+Each column is normalized for solver stability. Sparse operators and explicit nonnegative hinge slack variables avoid dense matrices and redundant solver variables. Small equality residuals are removed numerically; if first-month roundoff is repaired, the other eleven months are compensated to preserve the year's mean. Non-finite outputs and failed convergence still produce errors. This is not a reproduction of a Matson-Jack formula.
+
+For the review example, set Y10=98 and append Y11-Y13=100 in the input. The API never alters or appends source targets. This deliberately lowers Moderate/Fast from Y9 99/99.8 to Y10 98.
 
 Multiple percentage columns are processed independently. Headers are trimmed and compared case-insensitively; value names retain their trimmed spelling and original order. Output begins with integer `year` and `month` columns, sorted by year then month.
 
