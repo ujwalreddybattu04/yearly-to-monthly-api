@@ -28,14 +28,16 @@ year,value
 
 An optional trailing percent sign is accepted in every value column. `6` and `6%` both mean six percent, while `0.06` means 0.06 percent. Whitespace around the number and percent sign is ignored.
 
-- **average:** fit a shape-preserving PCHIP curve through yearly midpoint positions (6.5, 18.5, 30.5, ...), evaluate each month, then add a constant correction within each year so its 12 unrounded months average to the input percentage. Each value column is independent. A single year stays flat. Two years give a linear trend; identical yearly values can remain flat.
+- **average:** minimize the sum of squared monthly second differences with a sparse convex quadratic program (CVXPY/OSQP). Every year must average to its input target, and every month must stay in 0-100%. Columns solve independently. A single year remains flat; a year targeting exactly 0% or 100% is necessarily flat at that bound. Other years can curve smoothly where constraints permit.
 - **exit:** the first year is flat. In later years, month m equals `previous + ((current - previous) / 12) * m`. December is assigned the current yearly percentage exactly. Equal values stay flat; decreasing values produce a straight downward line.
 
 For exit mode, January 2023 is 6.17%, June is 7%, and December is 8%. January 2024 is 8.33% and December is 12%.
 Calculations keep full floating-point precision. Only output formatting rounds to two decimal places, removing .00 from whole numbers: `6%`, `6.10%`, `8.17%`.
 In exit mode, small differences between rounded displayed monthly steps do not change the underlying linear calculation. In average mode, the mean constraint holds on unrounded values within floating-point tolerance; the displayed two-decimal values can have a slightly different mean.
 
-The average algorithm uses spline extrapolation for months before the first midpoint and after the last midpoint. PCHIP limits overshoot between control points, but extrapolation and yearly corrections can still produce out-of-range values. Average returns HTTP 400 if any final value is outside 0-100%; no clipping is applied because clipping would change yearly means. Inputs ending at 100% (including the adoption curves) can therefore be rejected. A bounded year averaging 100% must be entirely flat at 100%. Different constant yearly corrections can introduce boundary discontinuities, so this requested two-step algorithm is not a guarantee of global continuity for arbitrary input. The 6%, 8%, 12% example is checked for small December-to-January steps.
+Average validates yearly targets in 0-100% before solving. Unlike the previous PCHIP method, valid adoption curves ending at 100% are accepted. Sparse second-difference and yearly-averaging matrices keep memory linear in the number of months. Solver matrices are reused across columns within each request. Tiny numerical residuals are removed by a bounded, mean-preserving projection; this does not clip an unconstrained curve or sacrifice yearly means. Solver failure produces an explicit error, never a silent flat fallback.
+
+Smoothing minimizes curvature subject to feasibility; it does not enforce monotonicity or promise zero boundary jumps for every input. Alternating yearly targets of 0% and 100% force whole years flat at alternating bounds, so boundary jumps are unavoidable. Only exact-bound years are forced flat; years near a bound may still vary.
 
 Multiple percentage columns are processed independently. Headers are trimmed and compared case-insensitively; value names retain their trimmed spelling and original order. Output begins with integer `year` and `month` columns, sorted by year then month.
 
@@ -85,7 +87,7 @@ Invalid input returns HTTP 400 with a clear JSON `detail`, regardless of output 
 - Empty, nonnumeric, NaN, or infinite values (including malformed percentage strings such as abc% or 6%%).
 - Non-integer years, duplicate years, or gaps between years after sorting.
 
-UTF-8 BOMs and uppercase .CSV extensions are supported. Average results must be within 0-100%, including the single-year fallback. Exit behavior is unchanged.
+UTF-8 BOMs and uppercase .CSV extensions are supported. Average yearly inputs and monthly results must be within 0-100%, including the single-year fallback. Exit behavior is unchanged.
 Missing required request parameters or invalid mode/format values return HTTP 422.
 
 ## Tests and code
@@ -120,7 +122,7 @@ See https://render.com/docs/deploy-fastapi and https://render.com/docs/free.
 
 Every calculated monthly value is checked for finiteness before formatting.
 Arithmetic overflow returns HTTP 400 naming the affected column.
-This check does not change either conversion algorithm or impose a new input range.
+Average separately rejects yearly inputs outside 0-100% before optimization; Exit retains its existing input behavior.
 
 Chart text is literal: dollar signs and backslashes are not interpreted as
 LaTeX or mathematical expressions. Charts and PDF tables both use the bundled

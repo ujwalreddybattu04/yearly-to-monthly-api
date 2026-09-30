@@ -1,9 +1,8 @@
-"""PCHIP Average must preserve means or reject unsafe results, never clip."""
+"""Bounded quadratic smoothing preserves yearly means."""
 import numpy as np
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
-from scipy.interpolate import PchipInterpolator
 from main import app, yearly_to_monthly
 
 client = TestClient(app)
@@ -14,36 +13,70 @@ ADOPTION = pd.DataFrame({
     "Fast": [8,25,48,68,83,92,97,99,99.8,100],
 })
 
-@pytest.mark.parametrize("column", ["Slow", "Moderate", "Fast"])
-@pytest.mark.parametrize("fmt", ["csv", "json", "pdf"])
-def test_adoption_rejected_instead_of_returning_impossible_percentages(column, fmt):
-    source = ADOPTION[["year", column]]
-    with pytest.raises(ValueError, match=column + "' cannot be smoothed"):
-        yearly_to_monthly(source, "average")
-    response = client.post("/convert", params={"mode":"average", "format":fmt},
-        files={"file":("curves.csv", source.to_csv(index=False), "text/csv")})
-    assert response.status_code == 400
-    assert "0-100%" in response.json()["detail"]
-    assert "Exit mode" in response.json()["detail"]
-
-@pytest.mark.parametrize("values", [[0,100,0,100], [6,12,3,9], [0,1], [99,100], [-1], [101]])
-def test_unsafe_results_are_rejected(values):
-    source = pd.DataFrame({"year":range(len(values)), "value":values})
-    with pytest.raises(ValueError, match="0-100%"):
-        yearly_to_monthly(source, "average")
-    response = client.post("/convert?mode=average", files={"file":("a.csv",source.to_csv(index=False))})
-    assert response.status_code == 400
-
-@pytest.mark.parametrize("values", [[6,8,12], [12,8,6], [20,40,60,80], [0,0], [100,100], [0], [100]])
-def test_safe_results_preserve_means_and_pchip_calculation(values):
-    source = pd.DataFrame({"year":range(len(values)), "value":values})
+def check(source):
     result = yearly_to_monthly(source, "average")
-    assert result.value.between(0,100).all()
-    np.testing.assert_allclose(result.groupby("year").value.mean(), values, atol=1e-9, rtol=0)
-    if len(values)>1:
-        candidate = PchipInterpolator(np.arange(len(values))*12+6.5, values)(np.arange(1,len(values)*12+1)).reshape(-1,12)
-        expected = candidate + (np.array(values)-candidate.mean(axis=1))[:,None]
-        np.testing.assert_allclose(result.value, expected.ravel(), atol=1e-12, rtol=0)
+    assert result.iloc[:,2:].ge(0).all().all()
+    assert result.iloc[:,2:].le(100).all().all()
+    np.testing.assert_allclose(result.groupby("year").mean().iloc[:,1:],
+                               source.iloc[:,1:], atol=1e-6, rtol=0)
+    return result
+
+
+def test_adoption_bounded_mean_exact_and_curved():
+    result = check(ADOPTION)
+    assert result[result.year==10].iloc[:,2:].eq(100).all().all()
+    assert result[result.year==5].iloc[:,2:].nunique().ge(3).all()
+    smooth = np.square(np.diff(result.iloc[:,2:].to_numpy(), n=2, axis=0)).sum()
+    flat = np.square(np.diff(np.repeat(ADOPTION.iloc[:,1:].to_numpy(),12,axis=0), n=2, axis=0)).sum()
+    assert smooth < flat
+
+
+@pytest.mark.parametrize("fmt", ["csv", "json", "pdf"])
+def test_adoption_all_formats(fmt):
+    from io import BytesIO, StringIO
+    from pypdf import PdfReader
+    from outputs import formatted_monthly
+    expected = formatted_monthly(check(ADOPTION))
+    response = client.post("/convert", params={"mode":"average", "format":fmt},
+        files={"file":("curves.csv", ADOPTION.to_csv(index=False), "text/csv")})
+    assert response.status_code == 200, response.text
+    if fmt == "csv":
+        assert pd.read_csv(StringIO(response.text)).to_dict("records") == expected.to_dict("records")
+    elif fmt == "json":
+        assert response.json() == expected.to_dict("records")
+    else:
+        assert response.content.startswith(b"%PDF")
+        text = "\n".join(p.extract_text() for p in PdfReader(BytesIO(response.content)).pages)
+        assert all(v in text for v in expected.iloc[:,2:].to_numpy().ravel())
+
+
+@pytest.mark.parametrize("values", [[0,100,0,100], [6,12,3,9], [0,1], [99,100], [6,8,12], [0], [100], [6]])
+def test_valid_targets_always_succeed(values):
+    source = pd.DataFrame({"year":range(len(values)), "value":values})
+    check(source)
+    response = client.post("/convert?mode=average&format=json", files={"file":("a.csv",source.to_csv(index=False))})
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize("value", [-1,150])
+def test_invalid_targets_rejected_before_solver(monkeypatch, value):
+    def fail(*args):
+        pytest.fail("Invalid targets must not reach optimizer")
+    monkeypatch.setattr("main.bounded_average", fail)
+    response = client.post("/convert?mode=average", files={"file":("a.csv",f"year,value\n1,{value}%")})
+    assert response.status_code == 400
+    assert "yearly value" in response.json()["detail"]
+
+
+def test_sparse_thousand_years_ten_columns():
+    from time import perf_counter
+    t = np.linspace(0, 12*np.pi, 1000)
+    source = pd.DataFrame({"year":range(1000), **{f"v{i}":50+40*np.sin(t+i/10) for i in range(10)}})
+    started = perf_counter()
+    check(source)
+    elapsed = perf_counter()-started
+    print(f"1000 years x 10 columns: {elapsed:.3f}s")
+    assert elapsed < 30
 
 
 def test_adoption_exit_stays_bounded_and_matches_endpoints():
@@ -51,9 +84,3 @@ def test_adoption_exit_stays_bounded_and_matches_endpoints():
     assert result.iloc[:,2:].ge(0).all().all()
     assert result.iloc[:,2:].le(100).all().all()
     np.testing.assert_array_equal(result[result.month==12].iloc[:,2:], ADOPTION.iloc[:,1:])
-
-
-def test_bad_second_column_is_identified_even_when_named_month():
-    source = pd.DataFrame({"year":[1,2], "safe":[6,8], "month":[99,100]})
-    with pytest.raises(ValueError, match="Column 'month' cannot be smoothed"):
-        yearly_to_monthly(source, "average")

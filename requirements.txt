@@ -8,3 +8,5 @@ matplotlib>=3.8,<4.0
 reportlab>=4.2,<5.0
 pypdf>=5.0,<7.0
 scipy>=1.11,<2.0
+cvxpy>=1.6,<2.0
+osqp>=1.0,<2.0

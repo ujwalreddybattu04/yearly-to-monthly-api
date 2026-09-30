@@ -75,8 +75,8 @@ def test_multiple_columns_and_header_normalization(mode):
     result = converted(content, mode)
     assert result.columns.tolist() == ["year", "month", "Sales", "prevalence"]
     if mode == "average":
-        assert result["Sales"].tolist() == [6.5 + i for i in range(24)]
-        assert result["prevalence"].tolist() == [29.5 - i for i in range(24)]
+        assert result["Sales"].tolist() == pytest.approx([6.5 + i for i in range(24)])
+        assert result["prevalence"].tolist() == pytest.approx([29.5 - i for i in range(24)])
     else:
         assert result["Sales"].tolist() == [1200] * 12 + list(range(1220, 1441, 20))
         assert result["prevalence"].tolist() == [240] * 12 + list(range(230, 119, -10))
@@ -346,7 +346,7 @@ def test_average_example_varies_and_has_small_boundary_steps():
 def test_average_single_year_skips_spline(monkeypatch):
     def unexpected_spline(*args, **kwargs):
         pytest.fail("Single year must not construct a spline")
-    monkeypatch.setattr("main.PchipInterpolator", unexpected_spline)
+    monkeypatch.setattr("smoothing.cp.Problem", unexpected_spline)
     result = yearly_to_monthly(pd.DataFrame({"year": [2022], "value": ["6%"]}), "average")
     assert result["value"].tolist() == [6.0] * 12
 

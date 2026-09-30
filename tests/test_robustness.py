@@ -29,9 +29,8 @@ def test_overflow_returns_clear_400(fmt, extreme):
     with np.errstate(over="ignore", invalid="ignore"):
         response = upload(f"year,normal,large\n2022,6%,{extreme}\n2023,8%,{extreme}", fmt=fmt)
     assert response.status_code == 400
-    assert response.json() == {
-        "detail": "Column 'large' produced a non-finite result; input values are too large."
-    }
+    assert "Column 'large' contains a yearly value" in response.json()["detail"]
+    assert "0-100%" in response.json()["detail"]
 
 
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
