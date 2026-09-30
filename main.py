@@ -8,7 +8,7 @@ import math
 
 import numpy as np
 import pandas as pd
-from scipy.interpolate import CubicSpline
+from scipy.interpolate import PchipInterpolator
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 
@@ -88,11 +88,11 @@ def yearly_to_monthly(df: pd.DataFrame, mode: Mode | str) -> pd.DataFrame:
     data = data.sort_values("year").reset_index(drop=True)
 
     if mode == Mode.average and len(data) > 1:
-        # Each column is an independent natural spline through year midpoints.
+        # Each column is an independent shape-preserving interpolator through year midpoints.
         targets = data[value_columns].to_numpy(dtype=float)
         midpoints = np.arange(len(data), dtype=float) * 12 + 6.5
         positions = np.arange(1, len(data) * 12 + 1, dtype=float)
-        spline = CubicSpline(midpoints, targets, axis=0, bc_type="natural")
+        spline = PchipInterpolator(midpoints, targets, axis=0)
         candidate = spline(positions).reshape(len(data), 12, len(value_columns))
         offsets = targets - candidate.mean(axis=1)
         corrected = candidate + offsets[:, None, :]
@@ -103,7 +103,7 @@ def yearly_to_monthly(df: pd.DataFrame, mode: Mode | str) -> pd.DataFrame:
             for index, year in enumerate(data["year"].tolist())
             for month in range(1, 13)
         ]
-        return _checked_monthly_frame(rows, value_columns)
+        return _checked_average_range(_checked_monthly_frame(rows, value_columns))
     rows = []
     previous = None
     for record in data.to_dict(orient="records"):
@@ -126,7 +126,22 @@ def yearly_to_monthly(df: pd.DataFrame, mode: Mode | str) -> pd.DataFrame:
                     monthly.append(value)
             rows.append([record["year"], month, *monthly])
         previous = current
-    return _checked_monthly_frame(rows, value_columns)
+    result = _checked_monthly_frame(rows, value_columns)
+    return _checked_average_range(result) if mode == Mode.average else result
+
+
+def _checked_average_range(result: pd.DataFrame) -> pd.DataFrame:
+    """Reject unsafe Average results without clipping or changing yearly means."""
+    for position in range(2, len(result.columns)):
+        if not result.iloc[:, position].between(0, 100).all():
+            column = result.columns[position]
+            raise ValueError(
+                f"Column '{column}' cannot be smoothed within a valid 0-100% range "
+                "for this input; the midpoint interpolation and yearly mean correction "
+                "produce out-of-range values. Try Exit mode instead for year-end "
+                "targets, or review the input data first."
+            )
+    return result
 
 
 def _checked_monthly_frame(rows: list, value_columns: list[str]) -> pd.DataFrame:

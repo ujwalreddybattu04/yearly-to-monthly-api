@@ -33,20 +33,20 @@ def converted(content, mode="average"):
 
 
 def test_average_single_year():
-    result = converted("year,value\n2022,1200\n")
+    result = converted("year,value\n2022,12\n")
     assert len(result) == 12
     assert result["month"].tolist() == list(range(1, 13))
     assert result["year"].eq(2022).all()
-    assert result["value"].eq(1200).all()
-    assert result["value"].mean() == 1200
+    assert result["value"].eq(12).all()
+    assert result["value"].mean() == 12
 
 
 def test_average_two_years_sorted():
-    result = converted("year,value\n2023,1440\n2022,1200\n")
+    result = converted("year,value\n2023,24\n2022,12\n")
     assert len(result) == 24
     assert result["year"].tolist() == [2022] * 12 + [2023] * 12
     assert result["month"].tolist() == list(range(1, 13)) * 2
-    assert result["value"].tolist() == list(range(1090, 1560, 20))
+    assert result["value"].tolist() == [6.5 + i for i in range(24)]
 
 
 def test_exit_example():
@@ -69,11 +69,14 @@ def test_exit_first_year_flat():
 
 @pytest.mark.parametrize("mode", ["average", "exit"])
 def test_multiple_columns_and_header_normalization(mode):
-    result = converted(" Sales , YEAR ,prevalence\n1200,2022,240\n1440,2023,120\n", mode)
+    content = " Sales , YEAR ,prevalence\n1200,2022,240\n1440,2023,120\n"
+    if mode == "average":
+        content = " Sales , YEAR ,prevalence\n12,2022,24\n24,2023,12\n"
+    result = converted(content, mode)
     assert result.columns.tolist() == ["year", "month", "Sales", "prevalence"]
     if mode == "average":
-        assert result["Sales"].tolist() == list(range(1090, 1560, 20))
-        assert result["prevalence"].tolist() == list(range(295, 64, -10))
+        assert result["Sales"].tolist() == [6.5 + i for i in range(24)]
+        assert result["prevalence"].tolist() == [29.5 - i for i in range(24)]
     else:
         assert result["Sales"].tolist() == [1200] * 12 + list(range(1220, 1441, 20))
         assert result["prevalence"].tolist() == [240] * 12 + list(range(230, 119, -10))
@@ -131,7 +134,7 @@ def test_unreadable_upload():
 
 
 def test_utf8_bom_and_uppercase_extension():
-    response = upload(b"\xef\xbb\xbfyear,value\r\n2022,1200\r\n", filename="YEARLY.CSV")
+    response = upload(b"\xef\xbb\xbfyear,value\r\n2022,12\r\n", filename="YEARLY.CSV")
     assert response.status_code == 200
     assert len(pd.read_csv(StringIO(response.text))) == 12
 
@@ -187,10 +190,10 @@ def test_docs_and_enum():
     assert output_parameter["schema"]["default"] == "csv"
 
 def test_month_named_value_column_is_preserved():
-    result = yearly_to_monthly(pd.DataFrame({"year": [2022], "month": [1200]}), "average")
+    result = yearly_to_monthly(pd.DataFrame({"year": [2022], "month": [12]}), "average")
     assert result.columns.tolist() == ["year", "month", "month"]
     assert result.iloc[:, 1].tolist() == list(range(1, 13))
-    assert result.iloc[:, 2].eq(1200).all()
+    assert result.iloc[:, 2].eq(12).all()
 
 
 @pytest.mark.parametrize("mode", ["average", "exit"])
@@ -317,7 +320,7 @@ def test_whitespace_percentage_input():
     assert response.status_code == 200
     assert pd.read_csv(StringIO(response.text))["value"].eq("6%").all()
 
-@pytest.mark.parametrize("values", [[6, 8, 12], [12, 8, 6], [6, 12, 3, 9], [6, 6, 6], [6, 8]])
+@pytest.mark.parametrize("values", [[6, 8, 12], [12, 8, 6], [26, 32, 23, 29], [6, 6, 6], [6, 8]])
 def test_average_spline_preserves_each_year_mean(values):
     source = pd.DataFrame({"year": range(2022, 2022 + len(values)), "value": values,
                            "second": [v * 0.3 + 1 for v in values]})
@@ -343,7 +346,7 @@ def test_average_example_varies_and_has_small_boundary_steps():
 def test_average_single_year_skips_spline(monkeypatch):
     def unexpected_spline(*args, **kwargs):
         pytest.fail("Single year must not construct a spline")
-    monkeypatch.setattr("main.CubicSpline", unexpected_spline)
+    monkeypatch.setattr("main.PchipInterpolator", unexpected_spline)
     result = yearly_to_monthly(pd.DataFrame({"year": [2022], "value": ["6%"]}), "average")
     assert result["value"].tolist() == [6.0] * 12
 
