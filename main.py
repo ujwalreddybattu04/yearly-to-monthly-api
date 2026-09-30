@@ -151,7 +151,7 @@ def _read_csv(content: bytes) -> pd.DataFrame:
     if "\x00" in text:
         raise ValueError("CSV contains invalid null characters; use UTF-8 encoding.")
     try:
-        records = [row for row in csv.reader(StringIO(text), strict=True) if row]
+        records = [row for row in csv.reader(StringIO(text, newline=""), strict=True) if row]
         if not records:
             raise ValueError("CSV must contain at least one data row.")
         width = len(records[0])
@@ -159,7 +159,7 @@ def _read_csv(content: bytes) -> pd.DataFrame:
             raise ValueError("Every CSV row must have the same number of fields as the header.")
         # Read the header as data to prevent pandas from renaming duplicate headers.
         frame = pd.read_csv(
-            StringIO(text), header=None, dtype=str, keep_default_na=False
+            StringIO(text, newline=""), header=None, dtype=str, keep_default_na=False
         )
         frame.columns = frame.iloc[0].tolist()
         return frame.iloc[1:].reset_index(drop=True)
