@@ -26,16 +26,24 @@ def test_thirteen_year_diagnostic(values):
     assert np.unique(result[48:60]).size>=3
 
 
-def test_gentle_data_matches_unpenalized_optimum():
+def test_gentle_data_uses_soft_range_penalty():
     result=convert([6,8,12])
-    # Independent equality-constrained least-curvature solution (no penalty).
-    n=36
-    d=np.diff(np.eye(n), n=2, axis=0)
-    a=np.kron(np.eye(3),np.ones((1,12))/12)
-    kkt=np.block([[2*d.T@d,a.T],[a,np.zeros((3,3))]])
-    reference=np.linalg.solve(kkt,np.r_[np.zeros(n),[6,8,12]])[:n]
-    assert reference[0]>FIRST_MONTH_FRACTION*12
-    np.testing.assert_allclose(result,reference,atol=1e-5)
+    assert result.min()>5.9 and result.max()<12.3
+    assert result.min()<6 or result.max()>12  # Not a hard box constraint.
+
+
+@pytest.mark.parametrize("values", [
+ [1,4,10,20,33,48,64,79,92,100],
+ [4,14,30,50,68,82,91,96,99,100],
+ [8,25,48,68,83,92,97,99,99.8,100],
+])
+def test_original_ten_year_range_regression(values):
+    result=convert(values)
+    assert max(0,result.max()-max(values)) < 0.33
+    assert max(0,min(values)-result.min()) < 0.74
+    # Maximum-target years remain accepted with the correct mean, not clamped.
+    assert result[-12:].mean()==pytest.approx(100,abs=1e-6)
+    assert result.max()>100
 
 
 def test_jump_excursions_near_transition():

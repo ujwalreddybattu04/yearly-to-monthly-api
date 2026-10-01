@@ -1,4 +1,4 @@
-"""Minimum-curvature monthly smoothing with exact yearly means and no range bounds or penalties."""
+"""Minimum-curvature monthly smoothing with exact yearly means and a data-derived soft-range penalty."""
 from decimal import Decimal, localcontext
 import math
 
@@ -7,6 +7,9 @@ import numpy as np
 from scipy import sparse
 
 
+# Higher values discourage range excursions; lower values prioritize curvature.
+# This weight never imposes a hard min/max bound.
+RANGE_PENALTY_WEIGHT = 0.1
 FIRST_MONTH_FRACTION = 0.01
 FIRST_MONTH_FLOOR = 1e-6
 
@@ -81,7 +84,7 @@ def smooth_average(targets, column_names=None):
 
     Scale each column before optimization to support ordinary absolute values
     and very large/small finite inputs without badly scaled solver constraints.
-    Only yearly means and the positive first-month constraint restrict the curve.
+    Yearly means and positive M1 are hard constraints; input extrema are soft preferences.
     """
     years, columns = targets.shape
     names = list(column_names) if column_names is not None else [f"column_{i}" for i in range(columns)]
@@ -104,8 +107,14 @@ def smooth_average(targets, column_names=None):
     x = cp.Variable(months)
     yearly = cp.Parameter(years)
     first_min = cp.Parameter(nonneg=True)
-    problem = cp.Problem(cp.Minimize(cp.sum_squares(differences @ x)),
-                         [averages @ x == yearly, x[0] >= first_min])
+    data_min, data_max = cp.Parameter(), cp.Parameter()
+    below, above = cp.Variable(months, nonneg=True), cp.Variable(months, nonneg=True)
+    objective = (cp.sum_squares(differences @ x)
+                 + RANGE_PENALTY_WEIGHT * cp.sum_squares(below)
+                 + RANGE_PENALTY_WEIGHT * cp.sum_squares(above))
+    problem = cp.Problem(cp.Minimize(objective),
+                         [averages @ x == yearly, x[0] >= first_min,
+                          below >= data_min - x, above >= x - data_max])
     result = np.empty((months, columns))
     for column in range(columns):
         target = targets[:, column]
@@ -116,10 +125,11 @@ def smooth_average(targets, column_names=None):
         scale = max(np.max(np.abs(target)), epsilon) / 100.0
         normalized = target / scale
         yearly.value = normalized
+        data_min.value, data_max.value = normalized.min(), normalized.max()
         first_min.value = epsilon / scale
         x.value = np.repeat(normalized, 12)
         try:
-            problem.solve(solver=cp.OSQP, eps_abs=1e-7, eps_rel=1e-7, adaptive_rho_interval=50,
+            problem.solve(solver=cp.OSQP, eps_abs=1e-7, eps_rel=1e-7, rho=0.01, adaptive_rho=False,
                           max_iter=30000, polishing=True, warm_start=True)
         except cp.error.SolverError as exc:
             raise ValueError("Average optimization failed to converge; please retry.") from exc

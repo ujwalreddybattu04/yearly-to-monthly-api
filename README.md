@@ -28,7 +28,7 @@ year,value
 
 An optional trailing percent sign is accepted in every value column. `6` and `6%` both mean six percent, while `0.06` means 0.06 percent. Whitespace around the number and percent sign is ignored.
 
-- **average:** minimize the sum of squared monthly second differences, subject to exact yearly means and the positive first-month constraint below. There are no hard range bounds, soft range penalties, clipping, or extrema-based restrictions. The curve can naturally exceed the yearly minimum and maximum. Precision safeguards still reject unreliable calculations.
+- **average:** minimize squared monthly second differences plus a squared-hinge penalty for leaving each column's own yearly minimum/maximum. `RANGE_PENALTY_WEIGHT = 0.1` controls this tradeoff; higher values discourage excursions more strongly. Nonnegative slack variables implement the penalty. Extrema are computed independently per column in normalized units. Yearly means and positive M1 remain hard constraints; there are no hard range bounds or percentage-specific restrictions.
 - **exit:** the first year is flat. In later years, month m equals `previous + ((current - previous) / 12) * m`. December is assigned the current yearly percentage exactly. Equal values stay flat; decreasing values produce a straight downward line.
 
 For exit mode, January 2023 is 6.17%, June is 7%, and December is 8%. January 2024 is 8.33% and December is 12%.
@@ -37,9 +37,9 @@ In exit mode, small differences between rounded displayed monthly steps do not c
 
 Average's first month has a hard positive lower limit: `epsilon = max(1e-6, 0.01 * max(data_max, 0))`, independently per value column. This is a first-month anchor only, not a range constraint for the entire curve. The absolute floor handles zero and negative maxima. Positive constants above epsilon stay flat; zero, negative, or extremely small constant targets require optimization to preserve their means while starting positive. Later months can be negative. Scaling invariance holds when the absolute floor is inactive; it deliberately does not hold below that floor.
 
-This is the no-range-penalty experiment requested by the reviewer. It is not completely unconstrained: annual means and the existing positive M1 rule remain. Overshoot, later negative months, and nonmonotonic sections are possible. No claim is made that excursions occur only near sharp jumps. Raw M1 is positive, but unchanged two-decimal formatting can display tiny positive values as `0%`.
+The soft-range behavior is restored alongside the precision safeguards below. It discourages rather than prohibits excursions: maximum-target years remain valid and small overshoot is possible even with gentle data. The algorithm does not guarantee monotonicity or confine all excursions to sharp jumps. Raw M1 is positive; unchanged two-decimal formatting can display tiny positive values as `0%`.
 
-The first-month epsilon formula is an implementation choice from the previous written specification, not a starting value supplied by the reviewer. It can affect the early curve. Exact means are also retained from the existing API contract. A Matson-Jack reference chart does not establish a formula or demonstrate equivalence to this optimizer. Sparse matrices are reused across columns; numerical residuals are corrected and independently verified before returning results.
+The first-month epsilon is retained from the written specification. Sparse operators and squared-hinge slack variables are reused across columns. Only numerical roundoff is corrected; every returned year's mean is independently verified in raw units using Decimal. Restoring the penalty does not relax precision verification or change Exit.
 
 For the review example, set Y10=98 and append Y11-Y13=100 in the input. The API never alters or appends source targets. This deliberately lowers Moderate/Fast from Y9 99/99.8 to Y10 98.
 

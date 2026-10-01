@@ -173,7 +173,7 @@ CONVERSION_RESPONSES = {
 @app.post("/convert", response_class=Response, responses=CONVERSION_RESPONSES)
 def convert(
     file: UploadFile = File(..., description="UTF-8 CSV containing yearly percentages, with or without %"),
-    mode: Mode = Query(..., description="No range bounds or penalties; positive first month and exact yearly means (average), or year-end interpolation (exit)"),
+    mode: Mode = Query(..., description="Soft data-range penalty; positive first month and exact yearly means (average), or year-end interpolation (exit)"),
     format: OutputFormat = Query(OutputFormat.csv, description="Response format"),
 ) -> Response:
     if not file.filename or not file.filename.lower().endswith(".csv"):
