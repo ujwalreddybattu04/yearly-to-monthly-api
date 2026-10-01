@@ -88,7 +88,7 @@ def test_multiple_columns_and_header_normalization(mode):
     "content,filename,detail",
     [
         ("year,value\n2022,1200", "yearly.txt", ".csv"),
-        (b"year,value\n2022,\xff", "yearly.csv", "decoded"),
+        (b"year,value\n2022,\x81", "yearly.csv", "decoded"),
         ("value\n1200", "yearly.csv", "year"),
         ("year\n2022", "yearly.csv", "value column"),
         ("year,value\n2022,hello", "yearly.csv", "numeric"),
@@ -138,6 +138,23 @@ def test_utf8_bom_and_uppercase_extension():
     response = upload(b"\xef\xbb\xbfyear,value\r\n2022,12\r\n", filename="YEARLY.CSV")
     assert response.status_code == 200
     assert len(pd.read_csv(StringIO(response.text))) == 12
+
+
+@pytest.mark.parametrize("mode", ["average", "exit"])
+def test_windows_1252_csv_upload(mode):
+    # Excel's Windows CSV uses byte 0x96 for the dash in these real headers.
+    source = (
+        b"year,10-Year \x96 Slow,10-Year \x96 Fast\r\n"
+        b"1,1.00%,8.00%\r\n"
+        b"2,4.00%,25.00%\r\n"
+    )
+    response = upload(source, mode)
+    assert response.status_code == 200, response.text
+    result = pd.read_csv(StringIO(response.text))
+    assert len(result) == 24
+    assert result.columns.tolist() == [
+        "year", "month", "10-Year \u2013 Slow", "10-Year \u2013 Fast"
+    ]
 
 
 def test_pure_function_does_not_mutate_input():

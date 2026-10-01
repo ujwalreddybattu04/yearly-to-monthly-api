@@ -134,15 +134,20 @@ def _checked_monthly_frame(rows: list, value_columns: list[str]) -> pd.DataFrame
 
 
 def _read_csv(content: bytes) -> pd.DataFrame:
-    """Read UTF-8 CSV, rejecting malformed records and duplicate headers."""
+    """Read UTF-8 or Windows-1252 CSV, rejecting malformed records and headers."""
     try:
         text = content.decode("utf-8-sig")
     except UnicodeError:
-        raise ValueError("CSV could not be decoded; use UTF-8 encoding.") from None
+        try:
+            text = content.decode("cp1252")
+        except UnicodeError:
+            raise ValueError(
+                "CSV could not be decoded; use UTF-8 or Windows-1252 encoding."
+            ) from None
     if not text.strip():
         raise ValueError("CSV must contain at least one data row.")
     if "\x00" in text:
-        raise ValueError("CSV contains invalid null characters; use UTF-8 encoding.")
+        raise ValueError("CSV contains invalid null characters; use a text CSV file.")
     try:
         records = [row for row in csv.reader(StringIO(text, newline=""), strict=True) if row]
         if not records:
@@ -172,7 +177,7 @@ CONVERSION_RESPONSES = {
 @app.get("/convert", response_class=Response, responses=CONVERSION_RESPONSES)
 @app.post("/convert", response_class=Response, responses=CONVERSION_RESPONSES)
 def convert(
-    file: UploadFile = File(..., description="UTF-8 CSV containing yearly percentages, with or without %"),
+    file: UploadFile = File(..., description="UTF-8 or Windows-1252 CSV containing yearly percentages, with or without %"),
     mode: Mode = Query(..., description="Soft data-range penalty; positive first month and exact yearly means (average), or year-end interpolation (exit)"),
     format: OutputFormat = Query(OutputFormat.csv, description="Response format"),
 ) -> Response:

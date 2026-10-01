@@ -86,12 +86,12 @@ GET /convert is also supported with the same multipart file body and query param
 
 Invalid input returns HTTP 400 with a clear JSON `detail`, regardless of output format:
 
-- Wrong file extension, unreadable content, invalid UTF-8, malformed CSV, or null characters.
+- Wrong file extension, unreadable content, unsupported text encoding, malformed CSV, or null characters.
 - Missing year column, missing value columns, empty or duplicate headers, or no data rows.
 - Empty, nonnumeric, NaN, or infinite values (including malformed percentage strings such as abc% or 6%%).
 - Non-integer years, duplicate years, or gaps between years after sorting.
 
-UTF-8 BOMs and uppercase .CSV extensions are supported. Finite absolute values and percentages are accepted without a 0-100 restriction. Exit calculations are unchanged.
+UTF-8 (with or without a BOM) and Windows-1252 CSV files are supported, including Excel exports with Windows-encoded punctuation in column names. Uppercase .CSV extensions are supported. Finite absolute values and percentages are accepted without a 0-100 restriction. Exit calculations are unchanged.
 Missing required request parameters or invalid mode/format values return HTTP 422.
 
 ## Tests and code
@@ -137,7 +137,7 @@ The font is bundled with the application; no server-installed font is required.
 Keep the fonts/ directory when copying or deploying this project.
 
 Value cells still require numeric percentages. Non-Latin text is supported in
-headers; a nonnumeric value such as å…­% is still invalid. Coverage is limited
+headers; a nonnumeric value such as 六% is still invalid. Coverage is limited
 to the bundled font's repertoire, not every Unicode script or emoji.
 
 For characters absent from the CJK font, both renderers use Matplotlib's bundled DejaVu Sans as a fallback, including accented Greek. PDF font runs are escaped as literal text before rendering.
