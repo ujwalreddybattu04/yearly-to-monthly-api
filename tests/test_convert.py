@@ -53,7 +53,7 @@ def test_average_two_years_sorted():
 def test_exit_example():
     result = converted("year,value\n2023,1440\n2022,1200\n", "exit")
     assert len(result) == 24
-    assert result["value"].tolist() == [1200] * 12 + list(range(1220, 1441, 20))
+    assert result["value"].tolist() == pytest.approx(list(range(980, 1441, 20)))
 
 
 def test_exit_equal_values():
@@ -62,7 +62,7 @@ def test_exit_equal_values():
     assert result["value"].eq(1200).all()
 
 
-def test_exit_first_year_flat():
+def test_exit_single_year_flat():
     result = converted("year,value\n2022,1440\n", "exit")
     assert len(result) == 12
     assert result["value"].eq(1440).all()
@@ -79,8 +79,8 @@ def test_multiple_columns_and_header_normalization(mode):
         assert result.groupby("year")["Sales"].mean().tolist() == pytest.approx([12,24], abs=0.01)
         assert result.groupby("year")["prevalence"].mean().tolist() == pytest.approx([24,12], abs=0.01)
     else:
-        assert result["Sales"].tolist() == [1200] * 12 + list(range(1220, 1441, 20))
-        assert result["prevalence"].tolist() == [240] * 12 + list(range(230, 119, -10))
+        assert result["Sales"].tolist() == pytest.approx(list(range(980, 1441, 20)))
+        assert result["prevalence"].tolist() == pytest.approx(list(range(350, 119, -10)))
 
 
 @pytest.mark.parametrize("mode", ["average", "exit"])
@@ -162,7 +162,7 @@ def test_pure_function_does_not_mutate_input():
     original = source.copy(deep=True)
     result = yearly_to_monthly(source, Mode.exit)
     pd.testing.assert_frame_equal(source, original)
-    assert result.iloc[12]["value"] == 1220
+    assert result.iloc[12]["value"] == pytest.approx(1220)
 
 
 def test_pure_function_validation():
@@ -173,7 +173,8 @@ def test_pure_function_validation():
 def test_round_only_when_formatting_output():
     source = pd.DataFrame({"year": [2022, 2023], "value": [6, 8]})
     result = yearly_to_monthly(source, "exit")
-    assert result.iloc[12]["value"] == 6 + 2 / 12
+    assert result.iloc[12]["value"] == pytest.approx(6 + 2 / 12, abs=1e-8)
+    assert result.iloc[12]["value"] != round(result.iloc[12]["value"], 2)
     response = upload("year,value\n2022,6%\n2023,8%", "exit")
     assert "2023,1,6.17%" in response.text
 
@@ -231,7 +232,8 @@ def test_average_percentage_level():
 def test_exit_percentage_endpoints():
     result = upload("year,value\n2022,6%\n2023,8%", "exit")
     rows = pd.read_csv(StringIO(result.text))
-    assert rows["value"].tolist()[:12] == ["6%"] * 12
+    assert rows.iloc[0]["value"] == "4.17%"
+    assert rows.iloc[11]["value"] == "6%"
     assert rows.iloc[12]["value"] == "6.17%"
     assert rows.iloc[-1]["value"] == "8%"
 
@@ -289,7 +291,7 @@ def test_pdf_builder_is_independent_and_paginates():
     pd.testing.assert_frame_equal(data, original)
 
 
-def test_chart_uses_linear_unrounded_data():
+def test_chart_uses_smoothed_unrounded_data():
     from outputs import build_trend_chart
     data = yearly_to_monthly(pd.DataFrame({"year": [2022, 2023, 2024], "value": ["6%", "8%", "12%"], "other": [12, 8, 6]}), "exit")
     figure = build_trend_chart(data)
@@ -299,8 +301,8 @@ def test_chart_uses_linear_unrounded_data():
             assert list(line.get_xdata()) == list(range(36))
             assert list(line.get_ydata()) == data.iloc[:, index + 2].tolist()
         values = list(figure.axes[0].lines[0].get_ydata())
-        assert [values[i] - values[i - 1] for i in range(12, 24)] == pytest.approx([2 / 12] * 12)
-        assert [values[i] - values[i - 1] for i in range(24, 36)] == pytest.approx([4 / 12] * 12)
+        assert [values[11], values[23], values[35]] == [6, 8, 12]
+        assert any(value != round(value, 2) for value in values)
     finally:
         figure.clear()
 

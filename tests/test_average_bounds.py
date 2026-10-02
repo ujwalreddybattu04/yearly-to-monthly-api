@@ -77,6 +77,6 @@ def test_sparse_thousand_years_ten_columns():
     assert elapsed < 30
 
 
-def test_adoption_exit_stays_bounded_and_matches_endpoints():
+def test_adoption_exit_matches_endpoints():
     result = yearly_to_monthly(ADOPTION, "exit")
     np.testing.assert_array_equal(result[result.month==12].iloc[:,2:], ADOPTION.iloc[:,1:])

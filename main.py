@@ -8,7 +8,7 @@ import math
 
 import numpy as np
 import pandas as pd
-from smoothing import smooth_average
+from smoothing import smooth_average, smooth_exit
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 
@@ -87,39 +87,15 @@ def yearly_to_monthly(df: pd.DataFrame, mode: Mode | str) -> pd.DataFrame:
 
     data = data.sort_values("year").reset_index(drop=True)
 
-    if mode == Mode.average:
-        targets = data[value_columns].to_numpy(dtype=float)
-        corrected = smooth_average(targets, value_columns)
-        rows = [
-            [year, month, *corrected[index * 12 + month - 1].tolist()]
-            for index, year in enumerate(data["year"].tolist())
-            for month in range(1, 13)
-        ]
-        return _checked_monthly_frame(rows, value_columns)
-    rows = []
-    previous = None
-    for record in data.to_dict(orient="records"):
-        current = [record[column] for column in value_columns]
-        for month in range(1, 13):
-            if mode == Mode.average:
-                monthly = current.copy()
-            elif previous is None or month == 12:
-                # Assign December directly so it exactly matches the input level.
-                monthly = current.copy()
-            else:
-                monthly = []
-                for old, new in zip(previous, current):
-                    difference = new - old
-                    if math.isfinite(difference):
-                        value = old + (difference / 12) * month
-                    else:
-                        # Equivalent interpolation avoids overflow for huge levels.
-                        value = old * ((12 - month) / 12) + new * (month / 12)
-                    monthly.append(value)
-            rows.append([record["year"], month, *monthly])
-        previous = current
-    result = _checked_monthly_frame(rows, value_columns)
-    return result
+    targets = data[value_columns].to_numpy(dtype=float)
+    smoother = smooth_average if mode == Mode.average else smooth_exit
+    corrected = smoother(targets, value_columns)
+    rows = [
+        [year, month, *corrected[index * 12 + month - 1].tolist()]
+        for index, year in enumerate(data["year"].tolist())
+        for month in range(1, 13)
+    ]
+    return _checked_monthly_frame(rows, value_columns)
 
 
 def _checked_monthly_frame(rows: list, value_columns: list[str]) -> pd.DataFrame:
@@ -178,7 +154,7 @@ CONVERSION_RESPONSES = {
 @app.post("/convert", response_class=Response, responses=CONVERSION_RESPONSES)
 def convert(
     file: UploadFile = File(..., description="UTF-8 or Windows-1252 CSV containing yearly percentages, with or without %"),
-    mode: Mode = Query(..., description="Soft data-range penalty; positive first month and exact yearly means (average), or year-end interpolation (exit)"),
+    mode: Mode = Query(..., description="Smooth yearly means with a soft range penalty (average), or smooth December targets with a non-negative first month (exit)"),
     format: OutputFormat = Query(OutputFormat.csv, description="Response format"),
 ) -> Response:
     if not file.filename or not file.filename.lower().endswith(".csv"):

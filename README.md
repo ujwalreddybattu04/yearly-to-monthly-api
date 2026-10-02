@@ -29,17 +29,19 @@ year,value
 An optional trailing percent sign is accepted in every value column. `6` and `6%` both mean six percent, while `0.06` means 0.06 percent. Whitespace around the number and percent sign is ignored.
 
 - **average:** minimize squared monthly second differences plus a squared-hinge penalty for leaving each column's own yearly minimum/maximum. `RANGE_PENALTY_WEIGHT = 0.1` controls this tradeoff; higher values discourage excursions more strongly. Nonnegative slack variables implement the penalty. Extrema are computed independently per column in normalized units. Yearly means and positive M1 remain hard constraints; there are no hard range bounds or percentage-specific restrictions.
-- **exit:** the first year is flat. In later years, month m equals `previous + ((current - previous) / 12) * m`. December is assigned the current yearly percentage exactly. Equal values stay flat; decreasing values produce a straight downward line.
+- **exit:** minimize squared monthly second differences across the entire timeline, with every December fixed to its yearly target and the first month constrained to be non-negative. Jan-Nov of the first year are solved together with all later months. Exit has no soft-range penalty and no positive-epsilon first-month floor. A single non-negative yearly target produces a flat year; a negative single-year target returns HTTP 400 because the flat fallback conflicts with the non-negative first-month rule.
 
-For exit mode, January 2023 is 6.17%, June is 7%, and December is 8%. January 2024 is 8.33% and December is 12%.
+With only two Exit targets, 2022=6% and 2023=8%, the minimum-curvature solution is a straight line: January 2022 is 4.17%, December 2022 is 6%, January 2023 is 6.17%, and December 2023 is 8%. With more years, all anchors influence the curve, so the monthly increments can vary.
 Calculations keep full floating-point precision. Only output formatting rounds to two decimal places, removing .00 from whole numbers: `6%`, `6.10%`, `8.17%`.
-In exit mode, small differences between rounded displayed monthly steps do not change the underlying linear calculation. In average mode, the mean constraint holds on unrounded values within floating-point tolerance; the displayed two-decimal values can have a slightly different mean.
+In average mode, the mean constraint holds on unrounded values within floating-point tolerance; the displayed two-decimal values can have a slightly different mean. Exit pins December to the original numeric target before formatting.
+
+Exit solves `min sum((x[t+1] - 2*x[t] + x[t-1])**2)` subject to `x[12*i+11] == yearly[i]` and `x[0] >= 0` (zero-based indices). Two distinct December positions determine the slope and remove the curvature objective's linear ambiguity. The guard applies only to the first month: other months can be negative, and overshoot beyond the yearly range is possible. For example, targets 0.01%, 80%, 100% produce an approximately zero first month but later dip to about -8.47%. Equal adjacent December targets do not necessarily make the intervening months flat when other years change; a completely constant non-negative series is flat.
 
 Average's first month has a hard positive lower limit: `epsilon = max(1e-6, 0.01 * max(data_max, 0))`, independently per value column. This is a first-month anchor only, not a range constraint for the entire curve. The absolute floor handles zero and negative maxima. Positive constants above epsilon stay flat; zero, negative, or extremely small constant targets require optimization to preserve their means while starting positive. Later months can be negative. Scaling invariance holds when the absolute floor is inactive; it deliberately does not hold below that floor.
 
 The soft-range behavior is restored alongside the precision safeguards below. It discourages rather than prohibits excursions: maximum-target years remain valid and small overshoot is possible even with gentle data. The algorithm does not guarantee monotonicity or confine all excursions to sharp jumps. Raw M1 is positive; unchanged two-decimal formatting can display tiny positive values as `0%`.
 
-The first-month epsilon is retained from the written specification. Sparse operators and squared-hinge slack variables are reused across columns. Only numerical roundoff is corrected; every returned year's mean is independently verified in raw units using Decimal. Restoring the penalty does not relax precision verification or change Exit.
+Average's first-month epsilon is retained from the written specification. Sparse operators and squared-hinge slack variables are reused across columns. Only numerical roundoff is corrected; every returned year's mean is independently verified in raw units using Decimal. Average's equations and precision verification are unchanged by the new Exit method.
 
 For the review example, set Y10=98 and append Y11-Y13=100 in the input. The API never alters or appends source targets. This deliberately lowers Moderate/Fast from Y9 99/99.8 to Y10 98.
 
@@ -56,7 +58,7 @@ The optional `format` query parameter is `csv` (default), `json`, or `pdf`.
 | json | application/json | Array of monthly objects directly in the body |
 | pdf | application/pdf | Download named monthly_<mode>.pdf |
 
-All three formats show the same percentage strings. JSON keeps year and month as integers. Example for a single-year 6% input (or the first year in exit mode):
+All three formats show the same percentage strings. JSON keeps year and month as integers. Example for a single-year 6% input:
 
 ```json
 [
@@ -91,7 +93,7 @@ Invalid input returns HTTP 400 with a clear JSON `detail`, regardless of output 
 - Empty, nonnumeric, NaN, or infinite values (including malformed percentage strings such as abc% or 6%%).
 - Non-integer years, duplicate years, or gaps between years after sorting.
 
-UTF-8 (with or without a BOM) and Windows-1252 CSV files are supported, including Excel exports with Windows-encoded punctuation in column names. Uppercase .CSV extensions are supported. Finite absolute values and percentages are accepted without a 0-100 restriction. Exit calculations are unchanged.
+UTF-8 (with or without a BOM) and Windows-1252 CSV files are supported, including Excel exports with Windows-encoded punctuation in column names. Uppercase .CSV extensions are supported. Finite absolute values and percentages are accepted without a 0-100 restriction, subject to each mode's calculation and accuracy constraints.
 Missing required request parameters or invalid mode/format values return HTTP 422.
 
 ## Tests and code
@@ -101,12 +103,13 @@ python -m pytest -q
 ```
 
 - `main.yearly_to_monthly(df, mode)`: pure conversion and validation; returns a numeric DataFrame without modifying the input.
+- `smoothing.smooth_average` and `smooth_exit`: independent column optimizations using shared sparse curvature operators and OSQP settings.
 - `outputs.formatted_monthly(df)`: shared percentage formatting.
 - `outputs.to_csv_response`, `to_json_response`, `to_pdf_response`: format-specific response builders.
 - `outputs.build_pdf(df, mode)`: independently testable in-memory PDF generation.
 - `outputs.build_trend_chart(df)`: plots all monthly numeric values without smoothing, randomization, or rounding.
 
-Tests cover the existing validation cases, both calculation modes, multiple columns, backward-compatible numeric inputs, matching CSV/JSON/PDF values, chart linearity, PDF pagination, download headers, and Swagger dropdowns. pypdf is used to inspect PDF table text and embedded charts in tests.
+Tests cover the existing validation cases, both calculation modes, multiple columns, backward-compatible numeric inputs, matching CSV/JSON/PDF values, chart data, PDF pagination, download headers, and Swagger dropdowns. Exit tests also compare against independent minimum-curvature equations, verify December anchors, first-month non-negativity, precision guards, and a 50-year/five-column timing check. pypdf is used to inspect PDF table text and embedded charts in tests.
 
 ## Render deployment
 
@@ -126,7 +129,7 @@ See https://render.com/docs/deploy-fastapi and https://render.com/docs/free.
 
 Every calculated monthly value is checked for finiteness before formatting.
 Arithmetic overflow returns HTTP 400 naming the affected column.
-Average scales each column internally for numerical stability and rejects non-finite calculated results; Exit retains its existing behavior.
+Both modes scale each column internally for numerical stability and reject non-finite calculated results.
 
 Chart text is literal: dollar signs and backslashes are not interpreted as
 LaTeX or mathematical expressions. Charts and PDF tables both use the bundled
@@ -144,8 +147,10 @@ For characters absent from the CJK font, both renderers use Matplotlib's bundled
 
 All API outputs retain percentage formatting. The query parameters are `mode` and `format`; there is no units selector.
 
-## Average precision safeguards
+## Precision safeguards
 
 Before constructing the optimizer, each column's largest/smallest nonzero absolute yearly target ratio is checked against `MAX_SAFE_MAGNITUDE_RATIO = 1e12`. Wider ranges fail the whole request with HTTP 400 naming the column. Zero values are excluded from the ratio. This is a conservative precision guard, not a proof that every smaller ratio is numerically safe.
 
-Every returned Average column, including single-year and constant fast paths, is independently checked after rescaling using Decimal arithmetic at 800-digit precision. Each year's relative mean error must be less than 1e-6, with a denominator floor of 1e-6 (equivalent to an absolute tolerance of 1e-12 near zero). Only tiny raw-unit equality residuals can be refined, by adjusting one small-magnitude month other than M1; the complete result must still pass verification. Unverifiable or non-finite output raises a named error instead of returning silently incorrect data. This check applies before two-decimal percentage display formatting. Exit is unchanged.
+Every returned Average column, including single-year and constant fast paths, is independently checked after rescaling using Decimal arithmetic at 800-digit precision. Each year's relative mean error must be less than 1e-6, with a denominator floor of 1e-6 (equivalent to an absolute tolerance of 1e-12 near zero). Only tiny raw-unit equality residuals can be refined, by adjusting one small-magnitude month other than M1; the complete result must still pass verification. Unverifiable or non-finite output raises a named error instead of returning silently incorrect data. This check applies before two-decimal percentage display formatting.
+
+Exit reuses the same magnitude-ratio guard and scaling. Normalized December and first-month solver residuals must be within 1e-8 before roundoff cleanup. December values are then assigned the original targets exactly, and every returned column is independently checked for finiteness, non-negative M1, and December accuracy using the same Decimal precision and tolerance as Average. Single-year and constant return paths also pass these checks.
